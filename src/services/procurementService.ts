@@ -6,6 +6,7 @@
 
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { ProcurementWorkflowStatus, VerificationType } from '../types/database';
+import { isValidUuid } from '../lib/utils';
 
 export interface ProcurementRequestDetails {
   id: string;
@@ -41,11 +42,36 @@ export interface VerificationAuditRecord {
 class ProcurementService {
   /**
    * Retrieves active procurement request by booking ID from Supabase.
+   * Gracefully handles UUIDs, 6-character tokens, and human-readable booking IDs (e.g. 'book-z12v3ne')
+   * without triggering PostgreSQL 22P02 UUID syntax errors.
    */
   async getRequestByBookingId(bookingId: string): Promise<ProcurementRequestDetails | null> {
     if (!isSupabaseConfigured() || !bookingId) return null;
 
     try {
+      let resolvedBookingUuid = isValidUuid(bookingId) ? bookingId : null;
+
+      // If bookingId is a human-readable identifier (e.g. 'book-z12v3ne' or token), resolve the DB UUID
+      if (!resolvedBookingUuid) {
+        const cleanId = bookingId.trim();
+        const { data: bRow } = await supabase
+          .from('bookings')
+          .select('id')
+          .or(`token.ilike.${cleanId},qr_identifier.ilike.*${cleanId}*`)
+          .limit(1)
+          .maybeSingle();
+
+        if (bRow?.id && isValidUuid(bRow.id)) {
+          resolvedBookingUuid = bRow.id;
+        }
+      }
+
+      // If no valid UUID exists (e.g. local offline booking or nonexistent), return null safely
+      // Never send a non-UUID string into a PostgreSQL UUID column
+      if (!resolvedBookingUuid) {
+        return null;
+      }
+
       const { data, error } = await supabase
         .from('procurement_requests')
         .select(`
@@ -67,7 +93,7 @@ class ProcurementService {
           procurement_centres ( name ),
           bookings ( token )
         `)
-        .eq('booking_id', bookingId)
+        .eq('booking_id', resolvedBookingUuid)
         .maybeSingle();
 
       if (error || !data) {

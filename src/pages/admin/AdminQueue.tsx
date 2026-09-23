@@ -3,6 +3,7 @@ import { useAdminAuth } from '../../contexts/AdminAuthContext';
 import { adminService } from '../../services/adminService';
 import { AdminCentreItem } from '../../types/admin';
 import { isSupabaseConfigured, supabase } from '../../lib/supabase';
+import { isValidUuid } from '../../lib/utils';
 import {
   calculateAverageProcessingTime,
   EtaCalculationResult,
@@ -614,14 +615,21 @@ export const AdminQueue: React.FC = () => {
           return;
         }
 
-        // 2. Update bookings status
-        const { error: bookingErr } = await supabase
+        // 2. Update bookings status safely handling UUID or token
+        let startUpdate = supabase
           .from('bookings')
           .update({
             booking_status: 'in_progress',
             updated_at: nowIso,
-          })
-          .eq('id', item.bookingId);
+          });
+
+        if (isValidUuid(item.bookingId)) {
+          startUpdate = startUpdate.eq('id', item.bookingId);
+        } else {
+          startUpdate = startUpdate.eq('token', item.token);
+        }
+
+        const { error: bookingErr } = await startUpdate;
 
         if (bookingErr) {
           setErrorMessage(`Failed to update booking status: ${bookingErr.message}`);
@@ -668,8 +676,20 @@ export const AdminQueue: React.FC = () => {
       await queueService.completeProcessing(token, selectedCentreId, duration);
 
       if (isSupabaseConfigured()) {
+        let resolvedBookingUuid = isValidUuid(currentlyProcessing.bookingId) ? currentlyProcessing.bookingId : null;
+        if (!resolvedBookingUuid) {
+          const { data: bFound } = await supabase
+            .from('bookings')
+            .select('id')
+            .eq('token', currentlyProcessing.token)
+            .maybeSingle();
+          if (bFound?.id && isValidUuid(bFound.id)) {
+            resolvedBookingUuid = bFound.id;
+          }
+        }
+
         // 0. Idempotency Check: Verify if booking is already marked completed
-        const { data: existingBooking, error: checkErr } = await supabase
+        let bCheckQuery = supabase
           .from('bookings')
           .select(`
             id,
@@ -683,9 +703,15 @@ export const AdminQueue: React.FC = () => {
             profiles ( full_name, mobile, district, email ),
             crops ( name ),
             procurement_centres ( name )
-          `)
-          .eq('id', currentlyProcessing.bookingId)
-          .maybeSingle();
+          `);
+
+        if (resolvedBookingUuid) {
+          bCheckQuery = bCheckQuery.eq('id', resolvedBookingUuid);
+        } else {
+          bCheckQuery = bCheckQuery.eq('token', currentlyProcessing.token);
+        }
+
+        const { data: existingBooking, error: checkErr } = await bCheckQuery.maybeSingle();
 
         if (checkErr) {
           setErrorMessage(`Failed to check booking status: ${checkErr.message}`);
@@ -702,7 +728,7 @@ export const AdminQueue: React.FC = () => {
 
         // 1. Insert queue_events record
         const { error: eventErr } = await supabase.from('queue_events').insert({
-          booking_id: currentlyProcessing.bookingId,
+          booking_id: resolvedBookingUuid || null,
           centre_id: selectedCentreId,
           event_type: 'processing_completed',
           estimated_processing_minutes: duration,
@@ -717,13 +743,20 @@ export const AdminQueue: React.FC = () => {
         }
 
         // 2. Update bookings status in Supabase (Authoritative persistence)
-        const { error: bookingErr } = await supabase
+        let completeUpdate = supabase
           .from('bookings')
           .update({
             booking_status: 'completed',
             updated_at: nowIso,
-          })
-          .eq('id', currentlyProcessing.bookingId);
+          });
+
+        if (resolvedBookingUuid) {
+          completeUpdate = completeUpdate.eq('id', resolvedBookingUuid);
+        } else {
+          completeUpdate = completeUpdate.eq('token', currentlyProcessing.token);
+        }
+
+        const { error: bookingErr } = await completeUpdate;
 
         if (bookingErr) {
           setErrorMessage(`Failed to update booking status: ${bookingErr.message}`);
@@ -946,9 +979,21 @@ export const AdminQueue: React.FC = () => {
       const nowIso = new Date().toISOString();
       const { data: userAuth } = await supabase.auth.getUser();
 
+      let checkInBookingUuid = isValidUuid(appt.bookingId) ? appt.bookingId : null;
+      if (!checkInBookingUuid) {
+        const { data: bFound } = await supabase
+          .from('bookings')
+          .select('id')
+          .eq('token', appt.token)
+          .maybeSingle();
+        if (bFound?.id && isValidUuid(bFound.id)) {
+          checkInBookingUuid = bFound.id;
+        }
+      }
+
       // 1. Create queue_events record for checked_in
       const { error: eventErr } = await supabase.from('queue_events').insert({
-        booking_id: appt.bookingId,
+        booking_id: checkInBookingUuid || null,
         centre_id: selectedCentreId,
         event_type: 'checked_in',
         event_time: nowIso,
@@ -962,13 +1007,20 @@ export const AdminQueue: React.FC = () => {
       }
 
       // 2. Mark booking in progress
-      const { error: bookingErr } = await supabase
+      let checkInUpdate = supabase
         .from('bookings')
         .update({
           booking_status: 'in_progress',
           updated_at: nowIso,
-        })
-        .eq('id', appt.bookingId);
+        });
+
+      if (checkInBookingUuid) {
+        checkInUpdate = checkInUpdate.eq('id', checkInBookingUuid);
+      } else {
+        checkInUpdate = checkInUpdate.eq('token', appt.token);
+      }
+
+      const { error: bookingErr } = await checkInUpdate;
 
       if (bookingErr) {
         setErrorMessage(`Failed to update booking status: ${bookingErr.message}`);

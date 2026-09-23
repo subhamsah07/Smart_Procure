@@ -259,9 +259,9 @@ export function calculateQueueEta(
 }
 
 /**
- * Checks whether a string is a valid RFC 4122 UUID to avoid SQL syntax errors
+ * Checks whether a string is a valid UUID (PostgreSQL standard 8-4-4-4-12 hex format) to avoid SQL syntax errors
  */
 export function isValidUuid(str?: string | null): boolean {
   if (!str) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 }

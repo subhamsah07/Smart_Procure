@@ -768,7 +768,7 @@ class AdminService {
         if (isValidUuid(cleanId)) {
           query = query.eq('id', cleanId);
         } else {
-          query = query.or(`token.ilike.${cleanId},qr_identifier.eq.${cleanId},id.eq.${cleanId}`);
+          query = query.or(`token.ilike.${cleanId},qr_identifier.ilike.*${cleanId}*`);
         }
 
         const { data: b, error } = await query.maybeSingle();
@@ -1353,16 +1353,34 @@ class AdminService {
       dbStatus = 'weight_rate_verification';
     }
 
-    // 1. Get or create procurement_request record
-    let { data: pr } = await supabase
-      .from('procurement_requests')
-      .select('*')
-      .eq('booking_id', params.bookingId)
-      .maybeSingle();
+    // 1. Get or create procurement_request record safely resolving UUID
+    let bookingUuid = isValidUuid(params.bookingId) ? params.bookingId : null;
+    if (!bookingUuid && params.bookingId) {
+      const cleanId = params.bookingId.trim();
+      const { data: bRow } = await supabase
+        .from('bookings')
+        .select('id')
+        .or(`token.ilike.${cleanId},qr_identifier.ilike.*${cleanId}*`)
+        .limit(1)
+        .maybeSingle();
+      if (bRow?.id && isValidUuid(bRow.id)) {
+        bookingUuid = bRow.id;
+      }
+    }
+
+    let pr: any = null;
+    if (bookingUuid) {
+      const { data: existingPr } = await supabase
+        .from('procurement_requests')
+        .select('*')
+        .eq('booking_id', bookingUuid)
+        .maybeSingle();
+      pr = existingPr;
+    }
 
     if (!pr) {
       // Fetch booking details to initialize procurement_request
-      const { data: b } = await supabase
+      let bQuery = supabase
         .from('bookings')
         .select(`
           id,
@@ -1373,9 +1391,16 @@ class AdminService {
           quantity,
           crops ( name ),
           procurement_centres ( state )
-        `)
-        .eq('id', params.bookingId)
-        .maybeSingle();
+        `);
+
+      if (bookingUuid) {
+        bQuery = bQuery.eq('id', bookingUuid);
+      } else {
+        const cleanId = (params.bookingId || '').trim();
+        bQuery = bQuery.or(`token.ilike.${cleanId},qr_identifier.ilike.*${cleanId}*`);
+      }
+
+      const { data: b } = await bQuery.limit(1).maybeSingle();
 
       if (!b) return localUpdated;
 

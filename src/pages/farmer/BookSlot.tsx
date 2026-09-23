@@ -937,7 +937,7 @@ export const BookSlot: React.FC = () => {
               }
               className="gap-2 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span>{t('bookSlot.confirmButton', 'Confirm & Generate 6-Char Token')}</span>
+              <span>{t('bookSlot.confirmButton', 'Confirm Booking')}</span>
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>

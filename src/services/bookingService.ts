@@ -29,7 +29,7 @@ import { queueService } from './queueService';
 
 export function isValidUuid(str?: string | null): boolean {
   if (!str) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 }
 
 /**
@@ -817,7 +817,7 @@ class BookingService {
     const clean = tokenOrId.trim().toUpperCase();
     const cancellationReason = reason || 'Cancelled by farmer';
 
-    let bookingDbId = tokenOrId;
+    let bookingDbId = isValidUuid(tokenOrId) ? tokenOrId : null;
     let centreId = '';
     let token = clean;
     let farmerId = '';
@@ -825,11 +825,17 @@ class BookingService {
 
     if (isSupabaseConfigured()) {
       try {
-        const { data: bRow } = await supabase
+        let findQuery = supabase
           .from('bookings')
-          .select('id, token, centre_id, farmer_id, quantity, crops(name)')
-          .or(`token.eq.${clean},id.eq.${tokenOrId}`)
-          .maybeSingle();
+          .select('id, token, centre_id, farmer_id, quantity, crops(name)');
+
+        if (isValidUuid(tokenOrId)) {
+          findQuery = findQuery.eq('id', tokenOrId);
+        } else {
+          findQuery = findQuery.or(`token.ilike.${clean},qr_identifier.ilike.*${clean}*`);
+        }
+
+        const { data: bRow } = await findQuery.limit(1).maybeSingle();
 
         if (bRow) {
           bookingDbId = bRow.id;
@@ -839,20 +845,27 @@ class BookingService {
           cropName = (bRow as any)?.crops?.name || 'Produce';
         }
 
-        const { error } = await supabase
+        let updateQuery = supabase
           .from('bookings')
           .update({
             booking_status: 'cancelled',
             updated_at: new Date().toISOString(),
-          })
-          .or(`token.eq.${clean},id.eq.${tokenOrId}`);
+          });
+
+        if (bookingDbId && isValidUuid(bookingDbId)) {
+          updateQuery = updateQuery.eq('id', bookingDbId);
+        } else {
+          updateQuery = updateQuery.or(`token.ilike.${clean},qr_identifier.ilike.*${clean}*`);
+        }
+
+        const { error } = await updateQuery;
 
         if (error) {
           throw new Error(`Failed to cancel booking in database: ${error.message}`);
         }
 
         // Insert cancelled event in queue_events for queue tracking & telemetry
-        if (centreId) {
+        if (centreId && bookingDbId && isValidUuid(bookingDbId)) {
           await supabase.from('queue_events').insert({
             centre_id: centreId,
             booking_id: bookingDbId,
@@ -862,8 +875,8 @@ class BookingService {
           });
         }
 
-        // Update procurement request if one exists
-        if (bookingDbId) {
+        // Update procurement request if one exists and booking ID is a valid UUID
+        if (bookingDbId && isValidUuid(bookingDbId)) {
           await supabase
             .from('procurement_requests')
             .update({
@@ -895,12 +908,14 @@ class BookingService {
     if (local) {
       local.workflowStatus = 'CANCELLED';
       local.bookingStatus = 'cancelled';
+      if (!centreId) centreId = local.centreId;
+      if (!token) token = local.token;
       this.persistLocalBookings();
     }
 
-    queueService.handleBookingCancelled({
-      bookingId: bookingDbId,
-      token,
+    queueService.removeFarmerFromQueue({
+      bookingId: bookingDbId || tokenOrId,
+      token: token || clean,
       centreId,
       reason: cancellationReason,
     });
@@ -923,39 +938,66 @@ class BookingService {
   }
 
   /**
-   * Looks up a booking by its 6-character token in Supabase.
+   * Looks up a booking by 6-character token, human-readable booking ID (e.g. 'book-z12v3ne'), or UUID.
    * Token validity is verified against public.bookings and local active stores.
+   * Ensures non-UUID values are never cast to UUID in PostgreSQL, preventing 22P02 errors.
    */
-  async getBookingByToken(token: string): Promise<ProcurementBooking | null> {
-    const cleanToken = token.trim().toUpperCase();
-    if (!cleanToken || cleanToken.length !== 6) return null;
+  async getBookingByToken(tokenOrId: string): Promise<ProcurementBooking | null> {
+    const clean = (tokenOrId || '').trim();
+    if (!clean) return null;
+
+    const upper = clean.toUpperCase();
+    const lower = clean.toLowerCase();
 
     this.initLocalBookings();
-    const localMatch = this.localBookings.find((b) => b.token.toUpperCase() === cleanToken);
+    const localMatch = this.localBookings.find(
+      (b) =>
+        b.token.toUpperCase() === upper ||
+        b.id === clean ||
+        b.id.toLowerCase() === lower ||
+        (b.id && clean.toLowerCase().includes(b.id.toLowerCase())) ||
+        (b.opaqueQrIdentifier && b.opaqueQrIdentifier.includes(clean))
+    );
     if (localMatch) return localMatch;
 
     if (!isSupabaseConfigured()) return null;
 
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('bookings')
         .select(`
           *,
           procurement_centres (id, name, state, district, capacity_per_day_quintals, operating_status),
           crops (id, name, hindi_name),
           profiles (id, full_name, mobile, state, district)
-        `)
-        .eq('token', cleanToken)
-        .maybeSingle();
+        `);
+
+      if (isValidUuid(clean)) {
+        query = query.eq('id', clean);
+      } else if (clean.length === 6 && !clean.includes('-')) {
+        query = query.or(`token.eq.${upper},qr_identifier.ilike.*${clean}*`);
+      } else {
+        // Handles 'book-xxxxxx' human-readable booking identifier without invalid UUID cast
+        query = query.or(`token.ilike.${clean},qr_identifier.ilike.*${clean}*`);
+      }
+
+      const { data, error } = await query.limit(1).maybeSingle();
 
       if (!error && data) {
         return mapDbBookingToUi(data);
       }
       return null;
     } catch (err) {
-      console.warn('Error fetching booking by token from Supabase:', err);
+      console.warn('Error fetching booking by token/id from Supabase:', err);
       return null;
     }
+  }
+
+  /**
+   * Looks up a booking by ID (alias for getBookingByToken supporting UUID and 'book-xxxxxx')
+   */
+  async getBookingById(id: string): Promise<ProcurementBooking | null> {
+    return this.getBookingByToken(id);
   }
 
   /**

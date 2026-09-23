@@ -65,6 +65,8 @@ function mapDbCentreToUi(dbRow: any, farmerCoords?: { lat: number; lon: number }
 }
 
 class CentreService {
+  private centresCache = new Map<string, ProcurementCentre>();
+
   /**
    * Retrieves procurement centres filtered by state, district, and optional coordinates.
    */
@@ -91,6 +93,10 @@ class CentreService {
 
         if (data && data.length > 0) {
           const mapped = data.map((row) => mapDbCentreToUi(row, filters?.farmerCoords));
+          mapped.forEach((c) => {
+            this.centresCache.set(c.id, c);
+            if (c.code) this.centresCache.set(c.code, c);
+          });
           return this.recommendCentres(mapped);
         }
       } catch (err) {
@@ -120,6 +126,10 @@ class CentreService {
         ),
       }));
     }
+    filtered.forEach((c) => {
+      this.centresCache.set(c.id, c);
+      if (c.code) this.centresCache.set(c.code, c);
+    });
     return this.recommendCentres(filtered);
   }
 
@@ -151,6 +161,12 @@ class CentreService {
    */
   async getCentreById(id: string): Promise<ProcurementCentre | null> {
     if (!id) return null;
+
+    // Fast memory resolution for centres discovered in current session
+    if (this.centresCache.has(id)) {
+      return this.centresCache.get(id)!;
+    }
+
     if (isSupabaseConfigured() && isValidUuid(id)) {
       try {
         const { data, error } = await supabase
@@ -160,7 +176,10 @@ class CentreService {
           .maybeSingle();
 
         if (!error && data) {
-          return mapDbCentreToUi(data);
+          const mapped = mapDbCentreToUi(data);
+          this.centresCache.set(mapped.id, mapped);
+          if (mapped.code) this.centresCache.set(mapped.code, mapped);
+          return mapped;
         }
       } catch (err) {
         console.warn(`Supabase getCentreById failed for ID ${id}:`, err);
@@ -169,6 +188,10 @@ class CentreService {
 
     // Fallback: match by ID or Code from DEFAULT_CENTRES
     const match = DEFAULT_CENTRES.find((c) => c.id === id || c.code === id);
+    if (match) {
+      this.centresCache.set(match.id, match);
+      if (match.code) this.centresCache.set(match.code, match);
+    }
     return match || null;
   }
 

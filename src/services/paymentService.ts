@@ -6,6 +6,7 @@
 
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { PaymentStatus } from '../types/database';
+import { isValidUuid } from '../lib/utils';
 
 export interface PaymentRecord {
   id: string;
@@ -99,29 +100,37 @@ class PaymentService {
 
   /**
    * Retrieves the specific payment record linked to a booking ID.
+   * Handles UUIDs, 6-character tokens, and human-readable booking IDs (e.g. 'book-z12v3ne') safely.
    */
   async getPaymentForBooking(bookingId: string): Promise<PaymentRecord | null> {
     if (!isSupabaseConfigured() || !bookingId) return null;
 
     try {
-      let actualBookingId = bookingId;
-      // If bookingId looks like a token instead of a UUID, resolve it to the booking id
-      if (!bookingId.includes('-')) {
+      let actualBookingUuid = isValidUuid(bookingId) ? bookingId : null;
+      // If bookingId looks like a token or human-readable identifier (e.g. 'book-z12v3ne'), resolve it to the booking UUID
+      if (!actualBookingUuid) {
+        const cleanId = bookingId.trim();
         const { data: bRow } = await supabase
           .from('bookings')
           .select('id')
-          .eq('token', bookingId)
+          .or(`token.ilike.${cleanId},qr_identifier.ilike.*${cleanId}*`)
+          .limit(1)
           .maybeSingle();
-        if (bRow?.id) {
-          actualBookingId = bRow.id;
+        if (bRow?.id && isValidUuid(bRow.id)) {
+          actualBookingUuid = bRow.id;
         }
+      }
+
+      // If no valid UUID could be resolved, do not query Postgres UUID column (prevents 22P02)
+      if (!actualBookingUuid) {
+        return null;
       }
 
       // First find the procurement request for this booking
       const { data: pr, error: prErr } = await supabase
         .from('procurement_requests')
         .select('id, status, final_value, estimated_value, farmer_id, updated_at')
-        .eq('booking_id', actualBookingId)
+        .eq('booking_id', actualBookingUuid)
         .maybeSingle();
 
       if (prErr) {

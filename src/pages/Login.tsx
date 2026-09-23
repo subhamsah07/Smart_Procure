@@ -253,7 +253,7 @@ export const Login: React.FC = () => {
               onMouseDown={(e) => {
                 e.stopPropagation();
               }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold backdrop-blur-sm transition-colors ${
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg border text-xs font-semibold backdrop-blur-sm transition-colors ${
                 darkMode
                   ? 'border-neutral-800 bg-neutral-950/90 text-neutral-200 hover:bg-neutral-900'
                   : 'border-white/30 bg-white/90 text-slate-800 hover:bg-white shadow-xs'
@@ -261,15 +261,18 @@ export const Login: React.FC = () => {
               aria-label="Select Language"
               aria-expanded={langDropdownOpen}
             >
-              <Globe className={`h-3.5 w-3.5 ${darkMode ? 'text-neutral-400' : 'text-slate-600'}`} />
-              <span>
+              <Globe className={`h-3.5 w-3.5 shrink-0 ${darkMode ? 'text-neutral-400' : 'text-slate-600'}`} />
+              <span className="hidden sm:inline">
                 {LANGUAGES.find((l) => l.code === currentLang)?.nativeName || 'English'}
               </span>
-              <ChevronDown className={`h-3 w-3 opacity-60 transition-transform duration-200 ${langDropdownOpen ? 'rotate-180' : ''}`} />
+              <span className="sm:hidden font-mono uppercase text-[11px]">
+                {currentLang}
+              </span>
+              <ChevronDown className={`h-3 w-3 opacity-60 shrink-0 transition-transform duration-200 ${langDropdownOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {langDropdownOpen && (
-              <div className={`absolute right-0 mt-2 w-36 rounded-xl border shadow-xl py-1 z-50 text-xs backdrop-blur-md ${
+              <div className={`absolute right-0 mt-1.5 w-32 rounded-xl border shadow-xl py-1 z-50 text-xs backdrop-blur-md ${
                 darkMode ? 'border-neutral-800 bg-neutral-950 text-neutral-200' : 'border-slate-200 bg-white text-slate-700'
               }`}>
                 {LANGUAGES.map((lang) => (
@@ -284,7 +287,7 @@ export const Login: React.FC = () => {
                       e.stopPropagation();
                       handleLanguageChange(lang.code);
                     }}
-                    className={`w-full text-left px-3 py-2 flex items-center justify-between transition-colors ${
+                    className={`w-full text-left px-2.5 py-1.5 flex items-center justify-between transition-colors ${
                       currentLang === lang.code
                         ? darkMode
                           ? 'font-bold text-emerald-400 bg-neutral-900'
@@ -295,7 +298,7 @@ export const Login: React.FC = () => {
                     }`}
                   >
                     <span>{lang.nativeName}</span>
-                    <span className="text-[10px] opacity-60">{lang.label}</span>
+                    <span className="text-[10px] opacity-60 font-mono uppercase">{lang.code}</span>
                   </button>
                 ))}
               </div>

@@ -756,6 +756,15 @@ class QueueService {
    * renumbers the remaining waiting entries sequentially (advancing the next farmer in line),
    * and notifies all live subscribers and queue telemetry consumers.
    */
+  removeFarmerFromQueue(params: {
+    bookingId?: string;
+    token?: string;
+    centreId?: string;
+    reason?: string;
+  }): void {
+    this.handleBookingCancelled(params);
+  }
+
   handleBookingCancelled(params: {
     bookingId?: string;
     token?: string;
@@ -766,17 +775,19 @@ class QueueService {
     const bookingId = params.bookingId;
 
     // Remove from local stores across specified or all centres
-    const targetCentreIds = params.centreId ? [params.centreId] : Array.from(this.localStores.keys());
+    const targetCentreIds = params.centreId
+      ? Array.from(new Set([params.centreId, ...Array.from(this.localStores.keys())]))
+      : Array.from(this.localStores.keys());
 
     targetCentreIds.forEach((cId) => {
-      const store = this.localStores.get(cId);
+      const store = this.getStore(cId);
       if (!store) return;
 
       const initialLength = store.checkedInEntries.length;
       store.checkedInEntries = store.checkedInEntries
         .filter((e) => {
           if (cleanToken && e.token.toUpperCase() === cleanToken) return false;
-          if (bookingId && e.bookingId === bookingId) return false;
+          if (bookingId && (e.bookingId === bookingId || e.token === bookingId)) return false;
           return true;
         })
         .map((e, idx) => ({
@@ -1389,8 +1400,8 @@ class QueueService {
       centreName: booking.centreName,
       cropName: booking.cropName,
       quantityQuintals: booking.quantityQuintals,
-      position: position || (farmersAhead + 1),
-      farmersAhead,
+      position: status === 'COMPLETED' ? null : (position ?? (farmersAhead + 1)),
+      farmersAhead: status === 'COMPLETED' ? 0 : farmersAhead,
       estimatedWaitMinutes,
       formattedWaitTime,
       etaLabel,
