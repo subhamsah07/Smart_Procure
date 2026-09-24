@@ -248,12 +248,44 @@ class BookingService {
   private localBookings: ProcurementBooking[] = [];
 
   constructor() {
-    this.initLocalBookings();
+    // Keep localBookings empty initially; always load user-scoped on demand
+    this.localBookings = [];
+  }
+
+  public async getResolvedCurrentUserId(): Promise<string | null> {
+    if (isSupabaseConfigured()) {
+      try {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (!error && user?.id) {
+          return user.id;
+        }
+      } catch {
+        /* fallback to profile cache */
+      }
+    }
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const cached = localStorage.getItem('smartprocure_farmer_profile');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.id) {
+            return String(parsed.id);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return null;
+  }
+
+  public resetLocalCache(): void {
+    this.localBookings = [];
   }
 
   private getStorageKey(userId?: string | null): string {
-    if (userId && isValidUuid(userId)) {
-      return `smartprocure_farmer_bookings_${userId}`;
+    if (userId && typeof userId === 'string' && userId.trim()) {
+      return `smartprocure_farmer_bookings_${userId.trim()}`;
     }
     return 'smartprocure_farmer_bookings';
   }
@@ -261,25 +293,40 @@ class BookingService {
   private initLocalBookings(userId?: string | null) {
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
-        // If userId provided, look up user-scoped storage key first
-        if (userId && isValidUuid(userId)) {
+        if (userId && typeof userId === 'string' && userId.trim()) {
           const userKey = this.getStorageKey(userId);
           const stored = localStorage.getItem(userKey);
           if (stored) {
             const parsed = JSON.parse(stored);
             if (Array.isArray(parsed)) {
-              this.localBookings = parsed.filter((b: ProcurementBooking) => !b.farmerId || b.farmerId === userId);
+              // Positively verify owner is the current user. Never allow un-scoped or another user's booking!
+              this.localBookings = parsed.filter(
+                (b: ProcurementBooking) => b && b.farmerId === userId
+              );
               return;
+            }
+          }
+          // Check legacy storage only to safely migrate strictly matching records
+          const legacy = localStorage.getItem('smartprocure_farmer_bookings');
+          if (legacy) {
+            const parsedLegacy = JSON.parse(legacy);
+            if (Array.isArray(parsedLegacy)) {
+              const matched = parsedLegacy.filter(
+                (b: ProcurementBooking) => b && b.farmerId === userId
+              );
+              if (matched.length > 0) {
+                this.localBookings = matched;
+                this.persistLocalBookings(userId);
+                return;
+              }
             }
           }
           this.localBookings = [];
           return;
         }
 
-        const stored = localStorage.getItem('smartprocure_farmer_bookings');
-        if (stored) {
-          this.localBookings = JSON.parse(stored);
-        }
+        // If NO userId is specified, NEVER load un-scoped bookings into in-memory cache
+        this.localBookings = [];
       }
     } catch {
       this.localBookings = [];
@@ -289,11 +336,9 @@ class BookingService {
   private persistLocalBookings(userId?: string | null) {
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
-        if (userId && isValidUuid(userId)) {
+        if (userId && typeof userId === 'string' && userId.trim()) {
           const userKey = this.getStorageKey(userId);
           localStorage.setItem(userKey, JSON.stringify(this.localBookings));
-        } else {
-          localStorage.setItem('smartprocure_farmer_bookings', JSON.stringify(this.localBookings));
         }
       }
     } catch {
@@ -703,11 +748,35 @@ class BookingService {
    * Returns null if no active booking exists (clean empty state).
    */
   async getActiveBooking(): Promise<ProcurementBooking | null> {
-    if (isSupabaseConfigured()) {
+    const currentUserId = await this.getResolvedCurrentUserId();
+    if (!currentUserId) {
+      return null;
+    }
+
+    if (isSupabaseConfigured() && isValidUuid(currentUserId)) {
       try {
-        const { data: { user }, error: userErr } = await supabase.auth.getUser();
-        if (!userErr && user && isValidUuid(user.id)) {
-          let { data, error } = await supabase
+        let { data, error } = await supabase
+          .from('bookings')
+          .select(`
+            *,
+            procurement_centres (id, name, state, district, capacity_per_day_quintals, operating_status),
+            crops (id, name, hindi_name),
+            profiles (id, full_name, mobile, state, district)
+          `)
+          .eq('farmer_id', currentUserId)
+          .in('booking_status', ['booked', 'confirmed', 'in_progress'])
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (error) {
+          console.warn('Supabase active booking query notice:', error);
+        }
+
+        // If no pending or in_progress booking exists, check for today's completed booking
+        if (!data) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          const { data: completedRow } = await supabase
             .from('bookings')
             .select(`
               *,
@@ -715,80 +784,56 @@ class BookingService {
               crops (id, name, hindi_name),
               profiles (id, full_name, mobile, state, district)
             `)
-            .eq('farmer_id', user.id)
-            .in('booking_status', ['booked', 'confirmed', 'in_progress'])
-            .order('created_at', { ascending: false })
+            .eq('farmer_id', currentUserId)
+            .eq('booking_status', 'completed')
+            .order('updated_at', { ascending: false })
             .limit(1)
             .maybeSingle();
 
-          if (error) {
-            console.warn('Supabase active booking query notice:', error);
-          }
-
-          // If no pending or in_progress booking exists, check for today's completed booking
-          if (!data) {
-            const todayStr = new Date().toISOString().split('T')[0];
-            const { data: completedRow } = await supabase
-              .from('bookings')
-              .select(`
-                *,
-                procurement_centres (id, name, state, district, capacity_per_day_quintals, operating_status),
-                crops (id, name, hindi_name),
-                profiles (id, full_name, mobile, state, district)
-              `)
-              .eq('farmer_id', user.id)
-              .eq('booking_status', 'completed')
-              .order('updated_at', { ascending: false })
-              .limit(1)
-              .maybeSingle();
-
-            if (completedRow) {
-              const rowUpdated = completedRow.updated_at ? completedRow.updated_at.split('T')[0] : '';
-              const rowCreated = completedRow.created_at ? completedRow.created_at.split('T')[0] : '';
-              const rowAssigned = completedRow.assigned_date || '';
-              if (rowUpdated === todayStr || rowCreated === todayStr || rowAssigned === todayStr) {
-                data = completedRow;
-              }
+          if (completedRow) {
+            const rowUpdated = completedRow.updated_at ? completedRow.updated_at.split('T')[0] : '';
+            const rowCreated = completedRow.created_at ? completedRow.created_at.split('T')[0] : '';
+            const rowAssigned = completedRow.assigned_date || '';
+            if (rowUpdated === todayStr || rowCreated === todayStr || rowAssigned === todayStr) {
+              data = completedRow;
             }
           }
-
-          if (data) {
-            let rate = 2425;
-            try {
-              rate = await cropService.getCropPriceByState(
-                (data.crops?.name || 'Wheat') as CropName,
-                (data.procurement_centres?.state || 'Bihar') as IndianState
-              );
-            } catch {
-              /* ignore rate lookup */
-            }
-            return mapDbBookingToUi(data, rate);
-          }
-
-          // If Supabase authenticated user query completed without finding an active booking,
-          // check ONLY this user's scoped local store fallback
-          this.initLocalBookings(user.id);
-          const userLocalActive = this.localBookings.find(
-            (b) => b.farmerId === user.id && ['booked', 'confirmed', 'in_progress'].includes(b.bookingStatus)
-          );
-          if (userLocalActive) return userLocalActive;
-
-          return null;
         }
+
+        if (data) {
+          let rate = 2425;
+          try {
+            rate = await cropService.getCropPriceByState(
+              (data.crops?.name || 'Wheat') as CropName,
+              (data.procurement_centres?.state || 'Bihar') as IndianState
+            );
+          } catch {
+            /* ignore rate lookup */
+          }
+          return mapDbBookingToUi(data, rate);
+        }
+
+        // If Supabase authenticated user query completed without finding an active booking,
+        // check ONLY this user's scoped local store fallback
+        this.initLocalBookings(currentUserId);
+        const userLocalActive = this.localBookings.find(
+          (b) => b.farmerId === currentUserId && ['booked', 'confirmed', 'in_progress'].includes(b.bookingStatus)
+        );
+        if (userLocalActive) return userLocalActive;
+
+        return null;
       } catch (err) {
         console.warn('Active booking query exception:', err);
       }
     }
 
-    // Only if Supabase is completely unconfigured (offline / demo mode), check local fallback
-    if (!isSupabaseConfigured()) {
-      this.initLocalBookings();
-      if (this.localBookings.length > 0) {
-        const active = this.localBookings.find((b) =>
-          ['booked', 'confirmed', 'in_progress'].includes(b.bookingStatus)
-        ) || this.localBookings[0];
-        if (active) return active;
-      }
+    // Local scoped fallback for authenticated / active user
+    this.initLocalBookings(currentUserId);
+    if (this.localBookings.length > 0) {
+      const active = this.localBookings.find((b) =>
+        b.farmerId === currentUserId && ['booked', 'confirmed', 'in_progress'].includes(b.bookingStatus)
+      );
+      if (active) return active;
     }
 
     return null;
@@ -802,57 +847,61 @@ class BookingService {
   }
 
   /**
-   * Retrieves all historical and current bookings for the authenticated farmer from Supabase.
+   * Retrieves all historical and current bookings strictly for the authenticated farmer.
    */
   async getMyBookings(): Promise<ProcurementBooking[]> {
-    if (isSupabaseConfigured()) {
+    const currentUserId = await this.getResolvedCurrentUserId();
+    if (!currentUserId) {
+      return [];
+    }
+
+    if (isSupabaseConfigured() && isValidUuid(currentUserId)) {
       try {
-        const { data: { user }, error: userErr } = await supabase.auth.getUser();
-        if (!userErr && user && isValidUuid(user.id)) {
-          const map = new Map<string, ProcurementBooking>();
+        const map = new Map<string, ProcurementBooking>();
 
-          // 1. First fetch authoritative bookings from Supabase for this authenticated user
-          const { data, error } = await supabase
-            .from('bookings')
-            .select(`
-              *,
-              procurement_centres (id, name, state, district),
-              crops (id, name, hindi_name),
-              profiles (id, full_name, mobile)
-            `)
-            .eq('farmer_id', user.id)
-            .order('created_at', { ascending: false });
+        // 1. First fetch authoritative bookings from Supabase strictly for this authenticated user
+        const { data, error } = await supabase
+          .from('bookings')
+          .select(`
+            *,
+            procurement_centres (id, name, state, district),
+            crops (id, name, hindi_name),
+            profiles (id, full_name, mobile)
+          `)
+          .eq('farmer_id', currentUserId)
+          .order('created_at', { ascending: false });
 
-          if (!error && data && data.length > 0) {
-            data.forEach((item) => {
-              const ui = mapDbBookingToUi(item);
-              map.set(ui.id, ui);
-            });
-          }
-
-          // 2. Load ONLY user-scoped local bookings for optimistic offline fallback
-          this.initLocalBookings(user.id);
-          this.localBookings.forEach((b) => {
-            // Positively verify owner is the current user
-            if (b.farmerId === user.id && !map.has(b.id)) {
-              map.set(b.id, b);
-            }
+        if (!error && data && data.length > 0) {
+          data.forEach((item) => {
+            const ui = mapDbBookingToUi(item);
+            map.set(ui.id, ui);
           });
-
-          return Array.from(map.values()).sort(
-            (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-          );
         }
+
+        // 2. Load ONLY user-scoped local bookings for optimistic offline fallback
+        this.initLocalBookings(currentUserId);
+        this.localBookings.forEach((b) => {
+          // Positively verify owner is the current user
+          if (b.farmerId === currentUserId && !map.has(b.id)) {
+            map.set(b.id, b);
+          }
+        });
+
+        return Array.from(map.values()).sort(
+          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        );
       } catch (err) {
         console.warn('Booking history query exception:', err);
       }
     }
 
-    // Supabase unconfigured / offline demo mode fallback
-    this.initLocalBookings();
-    return [...this.localBookings].sort(
-      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
+    // Supabase unconfigured / offline demo mode fallback, strictly scoped to current user
+    this.initLocalBookings(currentUserId);
+    return [...this.localBookings]
+      .filter((b) => b && b.farmerId === currentUserId)
+      .sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
   }
 
   /**
@@ -919,7 +968,7 @@ class BookingService {
         }
 
         // Insert cancelled event in queue_events for queue tracking & telemetry
-        if (centreId && bookingDbId && isValidUuid(bookingDbId)) {
+        if (centreId && isValidUuid(centreId) && bookingDbId && isValidUuid(bookingDbId)) {
           await supabase.from('queue_events').insert({
             centre_id: centreId,
             booking_id: bookingDbId,
@@ -1068,7 +1117,8 @@ class BookingService {
    */
   async createBooking(params: CreateBookingParams): Promise<ProcurementBooking> {
     // 1. Validate farmer authentication
-    let currentUserId = 'farmer-rameshwar-01';
+    const resolvedUserId = await this.getResolvedCurrentUserId();
+    let currentUserId = resolvedUserId || 'farmer-rameshwar-01';
     let authUserEmail = 'farmer@smartprocure.gov.in';
 
     if (isSupabaseConfigured()) {

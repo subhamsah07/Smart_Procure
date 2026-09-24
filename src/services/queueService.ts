@@ -492,13 +492,36 @@ class QueueService {
     if (isSupabaseConfigured()) {
       try {
         const clean = token.trim().toUpperCase();
-        let validUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(bookingId)
-          ? bookingId
-          : null;
+        let validUuid = isValidUuid(bookingId) ? bookingId : null;
 
         if (!validUuid) {
           const { data: bRow } = await supabase.from('bookings').select('id').eq('token', clean).maybeSingle();
-          if (bRow?.id) validUuid = bRow.id;
+          if (bRow?.id && isValidUuid(bRow.id)) validUuid = bRow.id;
+        }
+
+        // Search local farmer booking caches if still unassigned
+        if (!validUuid && typeof window !== 'undefined' && window.localStorage) {
+          try {
+            for (let i = 0; i < localStorage.length; i++) {
+              const k = localStorage.key(i);
+              if (k && (k.startsWith('smartprocure_farmer_bookings_') || k === 'smartprocure_farmer_bookings')) {
+                const list = JSON.parse(localStorage.getItem(k) || '[]');
+                if (Array.isArray(list)) {
+                  const m = list.find((item: any) =>
+                    item.token?.toUpperCase() === clean ||
+                    item.id === bookingId ||
+                    item.bookingId === bookingId
+                  );
+                  if (m) {
+                    if (m.bookingId && isValidUuid(m.bookingId)) validUuid = m.bookingId;
+                    else if (m.dbId && isValidUuid(m.dbId)) validUuid = m.dbId;
+                    else if (m.id && isValidUuid(m.id)) validUuid = m.id;
+                    if (validUuid) break;
+                  }
+                }
+              }
+            }
+          } catch {}
         }
 
         await supabase
@@ -506,13 +529,17 @@ class QueueService {
           .update({ booking_status: 'in_progress', updated_at: new Date().toISOString() })
           .eq('token', clean);
 
-        await supabase.from('queue_events').insert({
-          booking_id: validUuid,
-          centre_id: centreId,
-          event_type: 'checked_in',
-          notes: `Gate ingress verified for Token ${clean}`,
-          event_time: new Date().toISOString(),
-        });
+        if (validUuid && isValidUuid(centreId)) {
+          await supabase.from('queue_events').insert({
+            booking_id: validUuid,
+            centre_id: centreId,
+            event_type: 'checked_in',
+            notes: `Gate ingress verified for Token ${clean}`,
+            event_time: new Date().toISOString(),
+          });
+        } else {
+          console.warn(`[queueService.checkInFarmer] Skipping queue_events insert: cannot resolve valid UUID for booking "${bookingId}" or centre "${centreId}".`);
+        }
       } catch (err) {
         console.warn('Supabase checkin error (non-fatal):', err);
       }
@@ -551,20 +578,27 @@ class QueueService {
 
     if (isSupabaseConfigured()) {
       try {
+        let bookingUuid: string | null = null;
         const { data: b } = await supabase.from('bookings').select('id').eq('token', clean).maybeSingle();
-        if (b?.id) {
+        if (b?.id && isValidUuid(b.id)) {
+          bookingUuid = b.id;
           await supabase
             .from('bookings')
             .update({ booking_status: 'in_progress', updated_at: new Date().toISOString() })
             .eq('id', b.id);
         }
-        await supabase.from('queue_events').insert({
-          booking_id: b?.id || null,
-          centre_id: centreId,
-          event_type: 'processing_started',
-          notes: `Weighment processing started for Token ${clean}`,
-          event_time: new Date().toISOString(),
-        });
+
+        if (bookingUuid && isValidUuid(centreId)) {
+          await supabase.from('queue_events').insert({
+            booking_id: bookingUuid,
+            centre_id: centreId,
+            event_type: 'processing_started',
+            notes: `Weighment processing started for Token ${clean}`,
+            event_time: new Date().toISOString(),
+          });
+        } else {
+          console.warn(`[queueService.startProcessing] Skipping queue_events insert: cannot resolve valid UUID for token "${clean}" or centre.`);
+        }
       } catch (err) {
         console.warn('Supabase startProcessing notice:', err);
       }
@@ -625,14 +659,20 @@ class QueueService {
           .eq('token', clean)
           .maybeSingle();
 
-        await supabase.from('queue_events').insert({
-          booking_id: b?.id || null,
-          centre_id: centreId,
-          event_type: 'processing_completed',
-          estimated_processing_minutes: duration,
-          notes: `Weighment completed in ${duration} minutes for Token ${clean}`,
-          event_time: new Date().toISOString(),
-        });
+        const bookingUuid = b?.id && isValidUuid(b.id) ? b.id : null;
+
+        if (bookingUuid && isValidUuid(centreId)) {
+          await supabase.from('queue_events').insert({
+            booking_id: bookingUuid,
+            centre_id: centreId,
+            event_type: 'processing_completed',
+            estimated_processing_minutes: duration,
+            notes: `Weighment completed in ${duration} minutes for Token ${clean}`,
+            event_time: new Date().toISOString(),
+          });
+        } else {
+          console.warn(`[queueService.completeProcessing] Skipping queue_events insert: cannot resolve valid UUID for token "${clean}" or centre.`);
+        }
 
         if (b?.farmer_id) {
           const centreName = (b as any)?.procurement_centres?.name || 'Mandi Centre';
@@ -779,7 +819,7 @@ class QueueService {
   }): Promise<boolean> {
     const { centreId, delayMinutes, reason, notes } = params;
 
-    if (isSupabaseConfigured()) {
+    if (isSupabaseConfigured() && isValidUuid(centreId)) {
       try {
         await supabase.from('queue_events').insert({
           centre_id: centreId,
@@ -810,7 +850,7 @@ class QueueService {
    * PAUSE INTAKE:
    */
   async pauseProcurement(centreId: string, reason: string = 'Mandatory operational inspection'): Promise<boolean> {
-    if (isSupabaseConfigured()) {
+    if (isSupabaseConfigured() && isValidUuid(centreId)) {
       try {
         await supabase.from('queue_events').insert({
           centre_id: centreId,
@@ -835,7 +875,7 @@ class QueueService {
    * RESUME INTAKE / CLEAR DELAYS:
    */
   async resumeProcurement(centreId: string): Promise<boolean> {
-    if (isSupabaseConfigured()) {
+    if (isSupabaseConfigured() && isValidUuid(centreId)) {
       try {
         await supabase.from('queue_events').insert({
           centre_id: centreId,
@@ -1011,6 +1051,7 @@ class QueueService {
     let startedProcessingTime: string | undefined = undefined;
     let elapsedMinutes = 0;
     let completedAt: string | undefined = undefined;
+    let centreEvents: any[] | null = null;
 
     if (isSupabaseConfigured()) {
       try {
@@ -1086,7 +1127,7 @@ class QueueService {
         }
 
         // 2. Query centre queue_events for today (allowed by RLS for farmers with active centre bookings)
-        let centreEvents: any[] | null = null;
+        centreEvents = null;
         if (isValidUuid(centreId)) {
           const { data, error: eventsErr } = await supabase
             .from('queue_events')
@@ -1289,24 +1330,169 @@ class QueueService {
       }
     }
 
-    // If still in BOOKED state (before gate check-in), compute realistic live queue telemetry
-    // so farmer can see current serving position, upcoming process flow, and their live position/time
-    if (!isCompleted && status === 'BOOKED') {
-      const queueLength = store.checkedInEntries.length;
-      farmersAhead = queueLength;
-      position = queueLength + 1;
-      estimatedWaitMinutes = Math.max(10, farmersAhead * 18);
-      formattedWaitTime = farmersAhead === 0 ? 'Next in Line' : `~${estimatedWaitMinutes} min`;
-      etaLabel = farmersAhead === 0 ? 'Your vehicle is next for weighbridge call' : `${estimatedWaitMinutes} min — Scheduled slot rolling estimate`;
+    // Query scheduled bookings for the centre and date to calculate deterministic pre-gate queue ranking
+    const targetDate = booking.assignedDate || booking.bookingDate || new Date().toISOString().split('T')[0];
+    let scheduledBookings: Array<{
+      id: string;
+      token: string;
+      assignedStartTime: string;
+      createdAt: string;
+      cropName: string;
+      quantityQuintals: number;
+    }> = [];
+
+    if (isSupabaseConfigured() && isValidUuid(centreId)) {
+      try {
+        const { data: rows, error: schErr } = await supabase
+          .from('bookings')
+          .select(`
+            id,
+            token,
+            assigned_date,
+            preferred_date,
+            assigned_start_time,
+            created_at,
+            booking_status,
+            quantity,
+            crops (name)
+          `)
+          .eq('centre_id', centreId)
+          .or(`assigned_date.eq.${targetDate},preferred_date.eq.${targetDate}`)
+          .in('booking_status', ['booked', 'confirmed', 'in_progress']);
+
+        if (!schErr && rows && rows.length > 0) {
+          scheduledBookings = rows.map((r: any) => ({
+            id: r.id,
+            token: (r.token || '').trim().toUpperCase(),
+            assignedStartTime: r.assigned_start_time || '09:00:00',
+            createdAt: r.created_at || '',
+            cropName: r.crops?.name || 'Produce',
+            quantityQuintals: Number(r.quantity) || 25,
+          }));
+        }
+      } catch (err) {
+        console.warn('Supabase scheduled bookings query fallback:', err);
+      }
     }
 
-    // Determine current processing token & position
+    // Local storage fallback for scheduled bookings if offline / demo mode
+    if (scheduledBookings.length === 0 && typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const allLocalBookings: ProcurementBooking[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('smartprocure_farmer_bookings_') || k === 'smartprocure_farmer_bookings')) {
+            const val = localStorage.getItem(k);
+            if (val) {
+              const arr = JSON.parse(val);
+              if (Array.isArray(arr)) {
+                allLocalBookings.push(...arr);
+              }
+            }
+          }
+        }
+        scheduledBookings = allLocalBookings
+          .filter(
+            (b) =>
+              b.centreId === centreId &&
+              (b.assignedDate === targetDate || b.bookingDate === targetDate) &&
+              ['booked', 'confirmed', 'in_progress'].includes(b.bookingStatus) &&
+              b.workflowStatus !== 'CANCELLED' &&
+              b.workflowStatus !== 'PROCUREMENT_COMPLETED' &&
+              b.workflowStatus !== 'PAYMENT_COMPLETED'
+          )
+          .map((b) => ({
+            id: b.id,
+            token: (b.token || '').trim().toUpperCase(),
+            assignedStartTime: b.assignedStartTime || b.slotStartTime || '09:00:00',
+            createdAt: b.createdAt || '',
+            cropName: b.cropName || 'Wheat',
+            quantityQuintals: Number(b.quantityQuintals) || 25,
+          }));
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Ensure the current booking itself is present in the list if active
+    if (
+      !scheduledBookings.some((b) => b.token === cleanToken || b.id === booking.id) &&
+      status === 'BOOKED' &&
+      booking.bookingStatus !== 'cancelled' &&
+      booking.bookingStatus !== 'completed'
+    ) {
+      scheduledBookings.push({
+        id: booking.id,
+        token: cleanToken,
+        assignedStartTime: booking.assignedStartTime || booking.slotStartTime || '09:00:00',
+        createdAt: booking.createdAt || new Date().toISOString(),
+        cropName: booking.cropName || 'Wheat',
+        quantityQuintals: Number(booking.quantityQuintals) || 25,
+      });
+    }
+
+    // Sort candidate bookings deterministically:
+    // 1. Primary: Assigned scheduled start time
+    // 2. Secondary: created_at timestamp tie-breaker
+    // 3. Deterministic fallback: ID / Token
+    scheduledBookings.sort((a, b) => {
+      const timeA = (a.assignedStartTime || '09:00:00').padStart(8, '0');
+      const timeB = (b.assignedStartTime || '09:00:00').padStart(8, '0');
+      const timeDiff = timeA.localeCompare(timeB);
+      if (timeDiff !== 0) return timeDiff;
+
+      const cDiff = (a.createdAt || '').localeCompare(b.createdAt || '');
+      if (cDiff !== 0) return cDiff;
+
+      return a.id.localeCompare(b.id);
+    });
+
+    const bookedIndex = scheduledBookings.findIndex((b) => b.token === cleanToken || b.id === booking.id);
+
+    // If still in BOOKED state (before gate check-in), compute real scheduled pre-gate queue ranking
+    if (!isCompleted && status === 'BOOKED') {
+      const rankIndex = bookedIndex >= 0 ? bookedIndex : 0;
+      farmersAhead = rankIndex;
+      position = rankIndex + 1;
+      estimatedWaitMinutes = Math.max(10, farmersAhead * 18);
+      formattedWaitTime = farmersAhead === 0 ? 'Next in Line' : `~${estimatedWaitMinutes} min`;
+      etaLabel = farmersAhead === 0
+        ? 'Your vehicle is next for weighbridge call'
+        : `${estimatedWaitMinutes} min — Scheduled slot rolling estimate`;
+    }
+
+    // Check if there is an active processing booking from Supabase queue_events
+    let supabaseActiveServingToken: string | undefined = undefined;
+    if (centreEvents && isSupabaseConfigured()) {
+      const startedEvents = [...centreEvents].reverse().filter((e) => e.event_type === 'processing_started');
+      for (const ev of startedEvents) {
+        const bKey = ev.booking_id;
+        const isComp = centreEvents.some((e) => e.booking_id === bKey && e.event_type === 'processing_completed');
+        if (!isComp && ev.notes) {
+          const match = ev.notes.match(/[A-Z0-9]{6}/);
+          if (match) {
+            supabaseActiveServingToken = match[0];
+            break;
+          }
+        }
+      }
+    }
+
+    // Determine current processing token & position strictly from real queue events/store
     const activeProcessingEntry = store.checkedInEntries.find((e) => e.status === 'PROCESSING');
     const currentServingPosition = 1;
-    const currentServingToken =
-      activeProcessingEntry?.token ||
-      store.checkedInEntries[0]?.token ||
-      (status === 'PROCESSING' || position === 1 ? cleanToken : 'SP7K3M');
+    let currentServingToken: string | undefined = undefined;
+
+    if (status === 'PROCESSING') {
+      currentServingToken = cleanToken;
+    } else if (activeProcessingEntry?.token) {
+      currentServingToken = activeProcessingEntry.token;
+    } else if (supabaseActiveServingToken) {
+      currentServingToken = supabaseActiveServingToken;
+    } else if (store.checkedInEntries.length > 0 && store.checkedInEntries[0].status === 'PROCESSING') {
+      currentServingToken = store.checkedInEntries[0].token;
+    }
+    // Do NOT fabricate 'SP7K3M' if no real vehicle is at the weighbridge
 
     // Construct sequential process flow pipeline (Current Serving -> Waiting Ahead -> Your Position -> Upcoming)
     const upcomingProcessFlow: QueueProcessStep[] = [];
@@ -1339,17 +1525,21 @@ class QueueService {
         estimatedMinutesAway: userPos === 1 ? 0 : estimatedWaitMinutes,
       });
 
-      // Add one subsequent queue token to display the ongoing intake process
-      upcomingProcessFlow.push({
-        position: userPos + 1,
-        token: 'TK-9402',
-        stageName: 'Upcoming Slot In Queue',
-        status: 'SCHEDULED',
-        isCurrentUser: false,
-        farmerNameHint: 'Next Registered Intake',
-        crop: 'Wheat (25 Q)',
-        estimatedMinutesAway: estimatedWaitMinutes + 18,
-      });
+      // Add real next scheduled booking if one exists in the schedule
+      if (bookedIndex >= 0 && bookedIndex + 1 < scheduledBookings.length) {
+        const nextBooking = scheduledBookings[bookedIndex + 1];
+        upcomingProcessFlow.push({
+          position: userPos + 1,
+          token: nextBooking.token,
+          stageName: 'Upcoming Slot In Queue',
+          status: 'SCHEDULED',
+          isCurrentUser: false,
+          farmerNameHint: 'Next Registered Intake',
+          crop: `${nextBooking.cropName} (${nextBooking.quantityQuintals} Q)`,
+          estimatedMinutesAway: estimatedWaitMinutes + 18,
+        });
+      }
+      // Never push fake 'TK-9402'
     }
 
     // Ensure sorted strictly by position

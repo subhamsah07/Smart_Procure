@@ -599,20 +599,28 @@ export const AdminQueue: React.FC = () => {
       if (isSupabaseConfigured()) {
         const { data: userAuth } = await supabase.auth.getUser();
 
-        // 1. Insert queue_events record
-        const nowIso = new Date().toISOString();
-        const { error: eventErr } = await supabase.from('queue_events').insert({
-          booking_id: item.bookingId,
-          centre_id: selectedCentreId,
-          event_type: 'processing_started',
-          event_time: nowIso,
-          notes: `Weighment processing started for Token ${item.token} at Counter #1`,
-          created_by: userAuth.user?.id || null,
-        });
+        let resolvedBookingUuid = isValidUuid(item.bookingId) ? item.bookingId : null;
+        if (!resolvedBookingUuid) {
+          resolvedBookingUuid = await adminService.resolveBookingUuid(item.bookingId || item.token);
+        }
 
-        if (eventErr) {
-          setErrorMessage(`Failed to record queue event: ${eventErr.message}`);
-          return;
+        // 1. Insert queue_events record only if valid UUID is available
+        const nowIso = new Date().toISOString();
+        if (resolvedBookingUuid && isValidUuid(selectedCentreId)) {
+          const { error: eventErr } = await supabase.from('queue_events').insert({
+            booking_id: resolvedBookingUuid,
+            centre_id: selectedCentreId,
+            event_type: 'processing_started',
+            event_time: nowIso,
+            notes: `Weighment processing started for Token ${item.token} at Counter #1`,
+            created_by: userAuth.user?.id || null,
+          });
+
+          if (eventErr) {
+            console.warn('Queue event start error:', eventErr);
+          }
+        } else {
+          console.warn(`[AdminQueue.handleStartProcessing] Skipping queue_events insert: cannot resolve valid UUID for booking "${item.bookingId}" or centre "${selectedCentreId}".`);
         }
 
         // 2. Update bookings status safely handling UUID or token
@@ -623,8 +631,8 @@ export const AdminQueue: React.FC = () => {
             updated_at: nowIso,
           });
 
-        if (isValidUuid(item.bookingId)) {
-          startUpdate = startUpdate.eq('id', item.bookingId);
+        if (resolvedBookingUuid) {
+          startUpdate = startUpdate.eq('id', resolvedBookingUuid);
         } else {
           startUpdate = startUpdate.eq('token', item.token);
         }
@@ -726,20 +734,23 @@ export const AdminQueue: React.FC = () => {
 
         const { data: userAuth } = await supabase.auth.getUser();
 
-        // 1. Insert queue_events record
-        const { error: eventErr } = await supabase.from('queue_events').insert({
-          booking_id: resolvedBookingUuid || null,
-          centre_id: selectedCentreId,
-          event_type: 'processing_completed',
-          estimated_processing_minutes: duration,
-          event_time: nowIso,
-          notes: `Procurement & weighment completed for Token ${currentlyProcessing.token} in ${duration} mins`,
-          created_by: userAuth.user?.id || null,
-        });
+        // 1. Insert queue_events record only if valid UUID is available
+        if (resolvedBookingUuid && isValidUuid(selectedCentreId)) {
+          const { error: eventErr } = await supabase.from('queue_events').insert({
+            booking_id: resolvedBookingUuid,
+            centre_id: selectedCentreId,
+            event_type: 'processing_completed',
+            estimated_processing_minutes: duration,
+            event_time: nowIso,
+            notes: `Procurement & weighment completed for Token ${currentlyProcessing.token} in ${duration} mins`,
+            created_by: userAuth.user?.id || null,
+          });
 
-        if (eventErr) {
-          setErrorMessage(`Failed to complete procurement: ${eventErr.message}`);
-          return;
+          if (eventErr) {
+            console.warn('Queue event completion error:', eventErr);
+          }
+        } else {
+          console.warn(`[AdminQueue.handleCompleteProcurement] Skipping queue_events insert: cannot resolve valid UUID for booking "${currentlyProcessing.bookingId}" or centre "${selectedCentreId}".`);
         }
 
         // 2. Update bookings status in Supabase (Authoritative persistence)
@@ -843,19 +854,25 @@ export const AdminQueue: React.FC = () => {
         ? `${selectedDelayReason}: ${delayNotesInput.trim()}`
         : selectedDelayReason;
 
-      const { error } = await supabase.from('queue_events').insert({
-        centre_id: selectedCentreId,
-        booking_id: currentlyProcessing?.bookingId || null,
-        event_type: 'delayed',
-        delay_minutes: selectedDelayMinutes,
-        notes: notesCombined,
-        event_time: nowIso,
-        created_by: userAuth.user?.id || null,
-      });
+      let delayBookingUuid: string | null = null;
+      if (currentlyProcessing?.bookingId) {
+        delayBookingUuid = await adminService.resolveBookingUuid(currentlyProcessing.bookingId || currentlyProcessing.token);
+      }
 
-      if (error) {
-        setErrorMessage(`Failed to record operational delay: ${error.message}`);
-        return;
+      if (isValidUuid(selectedCentreId)) {
+        const { error } = await supabase.from('queue_events').insert({
+          centre_id: selectedCentreId,
+          booking_id: delayBookingUuid || null,
+          event_type: 'delayed',
+          delay_minutes: selectedDelayMinutes,
+          notes: notesCombined,
+          event_time: nowIso,
+          created_by: userAuth.user?.id || null,
+        });
+
+        if (error) {
+          console.warn('Operational delay log error:', error);
+        }
       }
 
       setDelayModalOpen(false);
@@ -889,13 +906,15 @@ export const AdminQueue: React.FC = () => {
       const nowIso = new Date().toISOString();
       const { data: userAuth } = await supabase.auth.getUser();
 
-      await supabase.from('queue_events').insert({
-        centre_id: selectedCentreId,
-        event_type: 'procurement_resumed',
-        notes: 'Operational delay resolved; normal intake resumed',
-        event_time: nowIso,
-        created_by: userAuth.user?.id || null,
-      });
+      if (isValidUuid(selectedCentreId)) {
+        await supabase.from('queue_events').insert({
+          centre_id: selectedCentreId,
+          event_type: 'procurement_resumed',
+          notes: 'Operational delay resolved; normal intake resumed',
+          event_time: nowIso,
+          created_by: userAuth.user?.id || null,
+        });
+      }
 
       await queueService.resumeProcurement(selectedCentreId);
       setSuccessBanner('Delay resolved. Yard procurement resumed.');
@@ -914,7 +933,7 @@ export const AdminQueue: React.FC = () => {
     setActionLoading('pause-intake');
     setErrorMessage(null);
     try {
-      if (isSupabaseConfigured()) {
+      if (isSupabaseConfigured() && isValidUuid(selectedCentreId)) {
         const { data: userAuth } = await supabase.auth.getUser();
         await supabase.from('queue_events').insert({
           centre_id: selectedCentreId,
@@ -940,7 +959,7 @@ export const AdminQueue: React.FC = () => {
     setActionLoading('resume-intake');
     setErrorMessage(null);
     try {
-      if (isSupabaseConfigured()) {
+      if (isSupabaseConfigured() && isValidUuid(selectedCentreId)) {
         const { data: userAuth } = await supabase.auth.getUser();
         await supabase.from('queue_events').insert({
           centre_id: selectedCentreId,
@@ -981,29 +1000,25 @@ export const AdminQueue: React.FC = () => {
 
       let checkInBookingUuid = isValidUuid(appt.bookingId) ? appt.bookingId : null;
       if (!checkInBookingUuid) {
-        const { data: bFound } = await supabase
-          .from('bookings')
-          .select('id')
-          .eq('token', appt.token)
-          .maybeSingle();
-        if (bFound?.id && isValidUuid(bFound.id)) {
-          checkInBookingUuid = bFound.id;
-        }
+        checkInBookingUuid = await adminService.resolveBookingUuid(appt.bookingId || appt.token);
       }
 
-      // 1. Create queue_events record for checked_in
-      const { error: eventErr } = await supabase.from('queue_events').insert({
-        booking_id: checkInBookingUuid || null,
-        centre_id: selectedCentreId,
-        event_type: 'checked_in',
-        event_time: nowIso,
-        notes: `Farmer checked in at Mandi gate for Token ${appt.token}`,
-        created_by: userAuth.user?.id || null,
-      });
+      // 1. Create queue_events record for checked_in only if valid UUID exists
+      if (checkInBookingUuid && isValidUuid(selectedCentreId)) {
+        const { error: eventErr } = await supabase.from('queue_events').insert({
+          booking_id: checkInBookingUuid,
+          centre_id: selectedCentreId,
+          event_type: 'checked_in',
+          event_time: nowIso,
+          notes: `Farmer checked in at Mandi gate for Token ${appt.token}`,
+          created_by: userAuth.user?.id || null,
+        });
 
-      if (eventErr) {
-        setErrorMessage(`Failed to check in farmer: ${eventErr.message}`);
-        return;
+        if (eventErr) {
+          console.warn('Queue event checkin warning:', eventErr);
+        }
+      } else {
+        console.warn(`[AdminQueue.handleCheckInFarmer] Skipping queue_events insert: cannot resolve valid booking UUID for "${appt.bookingId}".`);
       }
 
       // 2. Mark booking in progress
@@ -1013,6 +1028,12 @@ export const AdminQueue: React.FC = () => {
           booking_status: 'in_progress',
           updated_at: nowIso,
         });
+
+      if (checkInBookingUuid) {
+        checkInUpdate = checkInUpdate.eq('id', checkInBookingUuid);
+      } else {
+        checkInUpdate = checkInUpdate.eq('token', appt.token);
+      }
 
       if (checkInBookingUuid) {
         checkInUpdate = checkInUpdate.eq('id', checkInBookingUuid);

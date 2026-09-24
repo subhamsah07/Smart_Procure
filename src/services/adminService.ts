@@ -31,6 +31,186 @@ import { deriveVerificationCode, isValidUuid } from '../lib/utils';
 
 class AdminService {
   /**
+   * Discovers all farmer bookings across user-scoped storage keys (smartprocure_farmer_bookings_*)
+   * and legacy global keys (smartprocure_farmer_bookings).
+   * Deduplicates by the booking's unique identifier/token.
+   */
+  public getAllLocalBookings(): any[] {
+    if (typeof window === 'undefined' || !window.localStorage) return [];
+    const allBookings: any[] = [];
+    const seenIds = new Set<string>();
+
+    const addBooking = (b: any) => {
+      if (!b) return;
+      const key = String(b.id || b.token || '').trim();
+      if (!key || seenIds.has(key)) return;
+      seenIds.add(key);
+      allBookings.push(b);
+    };
+
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith('smartprocure_farmer_bookings_') || k === 'smartprocure_farmer_bookings')) {
+          const val = localStorage.getItem(k);
+          if (val) {
+            try {
+              const list = JSON.parse(val);
+              if (Array.isArray(list)) {
+                list.forEach(addBooking);
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+
+    return allBookings;
+  }
+
+  /**
+   * Updates a local booking across whichever storage key (user-scoped or legacy) contains it.
+   */
+  public mutateLocalBooking(bookingIdOrToken: string, mutator: (booking: any) => any): any | null {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const cleanId = String(bookingIdOrToken || '').trim().toLowerCase();
+    if (!cleanId) return null;
+
+    let updatedRecord: any = null;
+    const keysToScan: string[] = [];
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('smartprocure_farmer_bookings_') || k === 'smartprocure_farmer_bookings')) {
+        keysToScan.push(k);
+      }
+    }
+
+    for (const key of keysToScan) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const list = JSON.parse(raw);
+        if (!Array.isArray(list)) continue;
+
+        let modified = false;
+        for (let i = 0; i < list.length; i++) {
+          const item = list[i];
+          if (!item) continue;
+          const itemId = String(item.id || '').trim().toLowerCase();
+          const itemToken = String(item.token || '').trim().toLowerCase();
+          const itemQr = String(item.opaqueQrIdentifier || item.qr_identifier || '').trim().toLowerCase();
+          const itemCode = String(item.verificationCode || '').trim().toLowerCase();
+
+          if (
+            itemId === cleanId ||
+            itemToken === cleanId ||
+            itemQr === cleanId ||
+            itemCode === cleanId ||
+            (cleanId.length >= 6 && itemQr.includes(cleanId))
+          ) {
+            const updated = mutator(item);
+            list[i] = updated;
+            updatedRecord = updated;
+            modified = true;
+          }
+        }
+
+        if (modified) {
+          localStorage.setItem(key, JSON.stringify(list));
+        }
+      } catch {}
+    }
+
+    return updatedRecord;
+  }
+
+  /**
+   * Safely resolves the actual database booking UUID without casting non-UUIDs to UUID.
+   * Resolves from:
+   * 1. Already valid UUID
+   * 2. Local booking caches across smartprocure_farmer_bookings_*
+   * 3. Supabase bookings lookup by token or qr_identifier
+   * Returns null if unresolvable, preventing PostgreSQL 22P02 syntax errors.
+   */
+  public async resolveBookingUuid(bookingIdOrToken?: string | null): Promise<string | null> {
+    if (!bookingIdOrToken) return null;
+    const clean = String(bookingIdOrToken).trim();
+    if (!clean) return null;
+
+    // 1. Already a valid UUID
+    if (isValidUuid(clean)) {
+      return clean;
+    }
+
+    // 2. Search all local farmer booking caches
+    let tokenHint: string | null = clean.length === 6 && !clean.includes('-') ? clean.toUpperCase() : null;
+    let qrHint: string | null = null;
+
+    try {
+      const allLocal = this.getAllLocalBookings();
+      const cleanLower = clean.toLowerCase();
+      const localMatch = allLocal.find((b: any) => {
+        const bId = String(b.id || '').trim().toLowerCase();
+        const bBkId = String(b.bookingId || '').trim().toLowerCase();
+        const bToken = String(b.token || '').trim().toLowerCase();
+        const bQr = String(b.opaqueQrIdentifier || b.qr_identifier || '').trim().toLowerCase();
+        return (
+          bId === cleanLower ||
+          bBkId === cleanLower ||
+          bToken === cleanLower ||
+          (clean.length >= 6 && bQr.includes(cleanLower))
+        );
+      });
+
+      if (localMatch) {
+        if (localMatch.bookingId && isValidUuid(localMatch.bookingId)) {
+          return localMatch.bookingId;
+        }
+        if (localMatch.dbId && isValidUuid(localMatch.dbId)) {
+          return localMatch.dbId;
+        }
+        if (localMatch.id && isValidUuid(localMatch.id)) {
+          return localMatch.id;
+        }
+        if (localMatch.token) {
+          tokenHint = localMatch.token.toUpperCase();
+        }
+        if (localMatch.opaqueQrIdentifier || localMatch.qr_identifier) {
+          qrHint = localMatch.opaqueQrIdentifier || localMatch.qr_identifier;
+        }
+      }
+    } catch {
+      // Local scan fallback
+    }
+
+    // 3. Resolve from Supabase bookings table safely without casting non-UUID to id
+    if (isSupabaseConfigured()) {
+      try {
+        let query = supabase.from('bookings').select('id');
+        if (tokenHint) {
+          query = query.eq('token', tokenHint);
+        } else if (clean.startsWith('book-')) {
+          query = query.or(`token.ilike.${clean},qr_identifier.ilike.*${clean}*`);
+        } else if (qrHint) {
+          query = query.eq('qr_identifier', qrHint);
+        } else {
+          query = query.or(`token.ilike.${clean},qr_identifier.ilike.*${clean}*`);
+        }
+
+        const { data: bFound, error: bErr } = await query.limit(1).maybeSingle();
+        if (!bErr && bFound?.id && isValidUuid(bFound.id)) {
+          return bFound.id;
+        }
+      } catch (lookupErr) {
+        console.warn('Could not resolve booking UUID from Supabase:', lookupErr);
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Retrieves administrative credentials and authorized state for the current session.
    * Strictly reads from public.state_admins based on auth.uid().
    * Returns null if unauthenticated or if the account is not an active state admin.
@@ -419,6 +599,8 @@ class AdminService {
 
             return {
               id: b.id,
+              bookingId: b.id,
+              requestId: pr?.id || null,
               token: b.token,
               verificationCode: deriveVerificationCode(b.token, b.qr_identifier),
               qrIdentifier: b.qr_identifier,
@@ -455,65 +637,79 @@ class AdminService {
       }
     }
 
-    // 2. Merge locally created/updated farmer bookings in this state so live farmer bookings immediately reflect
+    // 2. Discover all local farmer bookings across user-scoped storage keys and legacy keys
     try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        const stored = localStorage.getItem('smartprocure_farmer_bookings');
-        if (stored) {
-          const localList: any[] = JSON.parse(stored);
-          localList.forEach((lb) => {
-            const matchesState =
-              !lb.farmerState ||
-              lb.farmerState.toLowerCase() === targetState.toLowerCase() ||
-              (lb.centreState && lb.centreState.toLowerCase() === targetState.toLowerCase()) ||
-              (lb.centreName && lb.centreName.toLowerCase().includes(targetState.toLowerCase())) ||
-              (targetState.toLowerCase() === 'bihar' && (lb.centreId?.startsWith('centre-br-') || lb.farmerDistrict));
+      const allLocalBookings = this.getAllLocalBookings();
+      allLocalBookings.forEach((lb) => {
+        // Resolve centre & state dynamically
+        const resolvedCentre = DEFAULT_CENTRES.find(
+          (c) => c.id === lb.centreId || c.code === lb.centreId
+        );
+        const centreState = resolvedCentre?.state || lb.centreState || lb.farmerState || '';
+        const centreName = resolvedCentre?.name || lb.centreName || 'Mandi Centre';
+        const centreDistrict = resolvedCentre?.district || lb.centreDistrict || lb.farmerDistrict || '';
 
-            if (matchesState) {
-              const existingIdx = items.findIndex((it) => it.id === lb.id || it.token === lb.token);
-              const rate = Number(lb.ratePerQuintal) || 2425;
-              const qty = Number(lb.quantityQuintals) || 0;
-              const localItem: AdminRequestItem = {
-                id: lb.id,
-                token: lb.token,
-                verificationCode: lb.verificationCode || deriveVerificationCode(lb.token, lb.opaqueQrIdentifier || `qr-${lb.token}`),
-                qrIdentifier: lb.opaqueQrIdentifier || `qr-${lb.token}`,
-                farmerId: lb.farmerId || 'farmer-local',
-                farmerName: lb.farmerName || 'Farmer',
-                farmerMobile: lb.farmerMobile || '',
-                farmerDistrict: lb.farmerDistrict || '',
-                centreId: lb.centreId,
-                centreName: lb.centreName || 'Mandi Centre',
-                centreDistrict: lb.centreDistrict || lb.farmerDistrict || '',
-                centreState: lb.centreState || lb.farmerState || targetState,
-                cropId: lb.cropId || 'crop-wheat',
-                cropName: lb.cropName || 'Wheat',
-                quantityQuintals: qty,
-                preferredDate: lb.bookingDate,
-                preferredTimeSlot: lb.preferredTimeSlot || 'no_preference',
-                assignedDate: lb.assignedDate || lb.bookingDate,
-                assignedStartTime: lb.assignedStartTime || '09:00:00',
-                assignedEndTime: lb.assignedEndTime || '10:00:00',
-                bookingStatus: (lb.bookingStatus || 'booked') as BookingStatus,
-                workflowStatus: (lb.workflowStatus || (lb.bookingStatus === 'completed' ? 'procurement_completed' : 'booking')) as ProcurementWorkflowStatus,
-                ratePerQuintal: rate,
-                estimatedValue: lb.estimatedValue || qty * rate,
-                finalValue: lb.finalProcurementAmount != null ? Number(lb.finalProcurementAmount) : null,
-                createdAt: lb.createdAt || new Date().toISOString(),
-                paymentStatus: lb.workflowStatus === 'PAYMENT_COMPLETED' ? 'completed' : null,
-                paymentAmount: lb.finalProcurementAmount != null ? Number(lb.finalProcurementAmount) : null,
-                paymentReference: lb.paymentReferenceId || null,
-              };
+        const matchesState =
+          !targetState ||
+          targetState.toLowerCase() === 'all' ||
+          targetState.toLowerCase() === 'all states' ||
+          centreState.toLowerCase() === targetState.toLowerCase();
 
-              if (existingIdx >= 0) {
-                items[existingIdx] = { ...items[existingIdx], ...localItem };
-              } else {
-                items.unshift(localItem);
-              }
-            }
-          });
+        if (matchesState) {
+          const existingIdx = items.findIndex((it) => it.id === lb.id || it.token === lb.token);
+          const rate = Number(lb.ratePerQuintal) || 2425;
+          const qty = Number(lb.quantityQuintals) || 0;
+          const rawWf = (lb.workflowStatus || '').toLowerCase().trim();
+          const workflowStatus: ProcurementWorkflowStatus =
+            rawWf === 'booked' || rawWf === 'booking' || !rawWf
+              ? 'booking'
+              : (rawWf as ProcurementWorkflowStatus);
+
+          const localItem: AdminRequestItem = {
+            id: lb.id,
+            bookingId: lb.id,
+            requestId: null,
+            token: lb.token,
+            verificationCode: lb.verificationCode || deriveVerificationCode(lb.token, lb.opaqueQrIdentifier || `qr-${lb.token}`),
+            qrIdentifier: lb.opaqueQrIdentifier || `qr-${lb.token}`,
+            farmerId: lb.farmerId || 'farmer-local',
+            farmerName: lb.farmerName || 'Farmer',
+            farmerMobile: lb.farmerMobile || '',
+            farmerDistrict: lb.farmerDistrict || centreDistrict || '',
+            centreId: lb.centreId,
+            centreName: centreName,
+            centreDistrict: centreDistrict,
+            centreState: centreState || targetState,
+            cropId: lb.cropId || 'crop-wheat',
+            cropName: lb.cropName || 'Wheat',
+            quantityQuintals: qty,
+            preferredDate: lb.bookingDate || lb.preferredDate,
+            preferredTimeSlot: lb.preferredTimeSlot || 'no_preference',
+            assignedDate: lb.assignedDate || lb.bookingDate,
+            assignedStartTime: lb.assignedStartTime || '09:00:00',
+            assignedEndTime: lb.assignedEndTime || '10:00:00',
+            bookingStatus: (lb.bookingStatus || 'booked') as BookingStatus,
+            workflowStatus: workflowStatus,
+            ratePerQuintal: rate,
+            estimatedValue: lb.estimatedValue || qty * rate,
+            finalValue: lb.finalProcurementAmount != null ? Number(lb.finalProcurementAmount) : null,
+            createdAt: lb.createdAt || new Date().toISOString(),
+            paymentStatus: workflowStatus === 'payment_completed' ? 'completed' : null,
+            paymentAmount: lb.finalProcurementAmount != null ? Number(lb.finalProcurementAmount) : null,
+            paymentReference: lb.paymentReferenceId || null,
+          };
+
+          if (existingIdx >= 0) {
+            items[existingIdx] = {
+              ...localItem,
+              ...items[existingIdx],
+              ...(items[existingIdx].requestId ? {} : localItem),
+            };
+          } else {
+            items.unshift(localItem);
+          }
         }
-      }
+      });
     } catch (e) {
       console.warn('Error reading local bookings in adminService:', e);
     }
@@ -612,21 +808,8 @@ class AdminService {
   }): boolean {
     if (typeof window === 'undefined' || !window.localStorage) return false;
     try {
-      const stored = localStorage.getItem('smartprocure_farmer_bookings');
-      if (!stored) return false;
-      const list = JSON.parse(stored);
       const cleanId = (params.bookingId || '').trim();
-      const idx = list.findIndex(
-        (b: any) =>
-          b &&
-          (b.id === cleanId ||
-            (b.token && b.token.toUpperCase() === cleanId.toUpperCase()) ||
-            b.opaqueQrIdentifier === cleanId ||
-            b.verificationCode === cleanId)
-      );
-
-      if (idx === -1) return false;
-      const b = list[idx];
+      if (!cleanId) return false;
 
       const validBookingStatus =
         params.newStatus === 'payment_completed'
@@ -635,30 +818,31 @@ class AdminService {
           ? 'cancelled'
           : 'in_progress';
 
-      const rate = params.verifiedRate || b.verifiedRate || b.ratePerQuintal || 2425;
-      const qty = params.verifiedQuantity || b.verifiedQuantity || b.quantityQuintals || 0;
-      const finalVal = params.finalValue != null ? params.finalValue : (b.finalProcurementAmount || qty * rate);
+      const updated = this.mutateLocalBooking(cleanId, (b) => {
+        const rate = params.verifiedRate || b.verifiedRate || b.ratePerQuintal || 2425;
+        const qty = params.verifiedQuantity || b.verifiedQuantity || b.quantityQuintals || 0;
+        const finalVal = params.finalValue != null ? params.finalValue : (b.finalProcurementAmount || qty * rate);
 
-      const updated = {
-        ...b,
-        workflowStatus: params.newStatus,
-        bookingStatus: validBookingStatus,
-        verifiedQuantity: qty,
-        quantityQuintals: qty,
-        verifiedRate: rate,
-        ratePerQuintal: rate,
-        finalProcurementAmount: finalVal,
-        finalValue: finalVal,
-        qualityGrade: params.qualityGrade || b.qualityGrade || 'approved',
-        paymentReferenceId:
-          params.paymentReference ||
-          b.paymentReferenceId ||
-          (params.newStatus === 'payment_completed' ? `DBT-BR-${Date.now().toString().slice(-8)}` : undefined),
-        updatedAt: new Date().toISOString(),
-      };
+        return {
+          ...b,
+          workflowStatus: params.newStatus,
+          bookingStatus: validBookingStatus,
+          verifiedQuantity: qty,
+          quantityQuintals: qty,
+          verifiedRate: rate,
+          ratePerQuintal: rate,
+          finalProcurementAmount: finalVal,
+          finalValue: finalVal,
+          qualityGrade: params.qualityGrade || b.qualityGrade || 'approved',
+          paymentReferenceId:
+            params.paymentReference ||
+            b.paymentReferenceId ||
+            (params.newStatus === 'payment_completed' ? `DBT-BR-${Date.now().toString().slice(-8)}` : undefined),
+          updatedAt: new Date().toISOString(),
+        };
+      });
 
-      list[idx] = updated;
-      localStorage.setItem('smartprocure_farmer_bookings', JSON.stringify(list));
+      if (!updated) return false;
 
       // Append verification record in localStorage
       let vType: any = 'document verification';
@@ -677,7 +861,7 @@ class AdminService {
         token: updated.token,
         verificationType: vType,
         status: params.newStatus === 'cancelled' || params.newStatus === 'rejected' ? 'rejected' : 'verified',
-        verifiedBy: 'Mandi Officer (Bihar Admin)',
+        verifiedBy: 'Mandi Officer (Admin)',
         notes: params.notes || `Advanced to ${params.newStatus}`,
         verifiedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
@@ -691,6 +875,10 @@ class AdminService {
       // Also create farmer notification
       try {
         const farmerId = updated.farmerId || 'farmer-local';
+        const finalVal = updated.finalValue || 0;
+        const rate = updated.verifiedRate || updated.ratePerQuintal || 2425;
+        const qty = updated.verifiedQuantity || updated.quantityQuintals || 0;
+
         if (params.newStatus === 'payment_completed') {
           notificationService.createNotification({
             farmerId,
@@ -825,6 +1013,8 @@ class AdminService {
 
             const reqItem: AdminRequestItem = {
               id: b.id,
+              bookingId: b.id,
+              requestId: pr?.id || null,
               token: b.token,
               verificationCode: deriveVerificationCode(b.token, b.qr_identifier),
               qrIdentifier: b.qr_identifier,
@@ -866,90 +1056,93 @@ class AdminService {
     // 2. Check locally created farmer bookings (supports local state & offline mode)
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
-        const stored = localStorage.getItem('smartprocure_farmer_bookings');
-        if (stored) {
-          const localList: any[] = JSON.parse(stored);
-          const lowerId = cleanId.toLowerCase();
-          const upperId = cleanId.toUpperCase();
+        const localList = this.getAllLocalBookings();
+        const lowerId = cleanId.toLowerCase();
+        const upperId = cleanId.toUpperCase();
 
-          const lb = localList.find((item: any) => {
-            if (!item) return false;
-            const itemId = String(item.id || '').trim();
-            const itemToken = String(item.token || '').trim();
-            const itemQr = String(item.opaqueQrIdentifier || item.qr_identifier || '').trim();
-            const itemPin = String(item.verificationCode || '').trim();
+        const lb = localList.find((item: any) => {
+          if (!item) return false;
+          const itemId = String(item.id || '').trim();
+          const itemToken = String(item.token || '').trim();
+          const itemQr = String(item.opaqueQrIdentifier || item.qr_identifier || '').trim();
+          const itemPin = String(item.verificationCode || '').trim();
 
-            return (
-              itemId === cleanId ||
-              itemId.toLowerCase() === lowerId ||
-              itemToken.toUpperCase() === upperId ||
-              itemQr === cleanId ||
-              itemPin === cleanId
-            );
-          });
+          return (
+            itemId === cleanId ||
+            itemId.toLowerCase() === lowerId ||
+            itemToken.toUpperCase() === upperId ||
+            itemQr === cleanId ||
+            itemPin === cleanId
+          );
+        });
 
-          if (lb) {
-            const bState = lb.centreState || lb.farmerState || '';
-            const isBiharCentre = lb.centreId?.startsWith('centre-br-') || Boolean(lb.farmerDistrict);
-            const matchesState =
-              !targetState ||
-              targetState.toLowerCase() === 'all' ||
-              bState.toLowerCase() === targetState.toLowerCase() ||
-              (lb.centreName && lb.centreName.toLowerCase().includes(targetState.toLowerCase())) ||
-              (targetState.toLowerCase() === 'bihar' && (bState.toLowerCase() === 'bihar' || isBiharCentre || !bState));
+        if (lb) {
+          const resolvedCentre = DEFAULT_CENTRES.find(
+            (c) => c.id === lb.centreId || c.code === lb.centreId
+          );
+          const centreState = resolvedCentre?.state || lb.centreState || lb.farmerState || '';
+          const centreName = resolvedCentre?.name || lb.centreName || 'Mandi Centre';
+          const centreDistrict = resolvedCentre?.district || lb.centreDistrict || lb.farmerDistrict || '';
+          const matchesState =
+            !targetState ||
+            targetState.toLowerCase() === 'all' ||
+            targetState.toLowerCase() === 'all states' ||
+            centreState.toLowerCase() === targetState.toLowerCase();
 
-            if (matchesState) {
-              const rate = Number(lb.ratePerQuintal) || 2425;
-              const qty = Number(lb.verifiedQuantity || lb.quantityQuintals) || 0;
-              const rawWf = (lb.workflowStatus || '').toLowerCase().trim();
-              const normalizedWf: ProcurementWorkflowStatus =
-                rawWf === 'booked' || rawWf === 'booking' || !rawWf
-                  ? 'booking'
-                  : rawWf === 'qr_verified'
-                  ? 'qr_verified'
-                  : rawWf === 'document_verification' || rawWf === 'documents_verified'
-                  ? 'document_verification'
-                  : rawWf === 'weight_rate_verification' || rawWf === 'crop_quality_check' || rawWf === 'quality_check'
-                  ? 'weight_rate_verification'
-                  : rawWf === 'procurement_completed' || rawWf === 'completed'
-                  ? 'procurement_completed'
-                  : rawWf === 'payment_processing'
-                  ? 'payment_processing'
-                  : rawWf === 'payment_completed'
-                  ? 'payment_completed'
-                  : (rawWf as ProcurementWorkflowStatus);
+          if (matchesState) {
+            const rate = Number(lb.ratePerQuintal) || 2425;
+            const qty = Number(lb.verifiedQuantity || lb.quantityQuintals) || 0;
+            const rawWf = (lb.workflowStatus || '').toLowerCase().trim();
+            const normalizedWf: ProcurementWorkflowStatus =
+              rawWf === 'booked' || rawWf === 'booking' || !rawWf
+                ? 'booking'
+                : rawWf === 'qr_verified'
+                ? 'qr_verified'
+                : rawWf === 'document_verification' || rawWf === 'documents_verified'
+                ? 'document_verification'
+                : rawWf === 'weight_rate_verification' || rawWf === 'crop_quality_check' || rawWf === 'quality_check'
+                ? 'weight_rate_verification'
+                : rawWf === 'procurement_completed' || rawWf === 'completed'
+                ? 'procurement_completed'
+                : rawWf === 'payment_processing'
+                ? 'payment_processing'
+                : rawWf === 'payment_completed'
+                ? 'payment_completed'
+                : (rawWf as ProcurementWorkflowStatus);
 
-              const reqItem: AdminRequestItem = {
-                id: lb.id,
-                token: lb.token,
-                verificationCode: lb.verificationCode || deriveVerificationCode(lb.token, lb.opaqueQrIdentifier || `qr-${lb.token}`),
-                qrIdentifier: lb.opaqueQrIdentifier || `qr-${lb.token}`,
-                farmerId: lb.farmerId || 'farmer-local',
-                farmerName: lb.farmerName || 'Farmer',
-                farmerMobile: lb.farmerMobile || '',
-                farmerDistrict: lb.farmerDistrict || '',
-                centreId: lb.centreId || 'centre-br-pat-01',
-                centreName: lb.centreName || 'Mandi Centre',
-                centreDistrict: lb.centreDistrict || lb.farmerDistrict || '',
-                centreState: lb.centreState || lb.farmerState || targetState,
-                cropId: lb.cropId || 'crop-wheat',
-                cropName: lb.cropName || 'Wheat',
-                quantityQuintals: qty,
-                preferredDate: lb.bookingDate || lb.preferredDate || lb.assignedDate,
-                preferredTimeSlot: lb.preferredTimeSlot || 'no_preference',
-                assignedDate: lb.assignedDate || lb.bookingDate,
-                assignedStartTime: lb.assignedStartTime || '09:00:00',
-                assignedEndTime: lb.assignedEndTime || '10:00:00',
-                bookingStatus: (lb.bookingStatus || 'booked') as BookingStatus,
-                workflowStatus: normalizedWf,
-                ratePerQuintal: rate,
-                estimatedValue: lb.estimatedValue || qty * rate,
-                finalValue: lb.finalProcurementAmount != null ? Number(lb.finalProcurementAmount) : null,
-                createdAt: lb.createdAt || new Date().toISOString(),
-                paymentStatus: (normalizedWf === 'payment_completed') ? 'completed' : (lb.paymentStatus || null),
-                paymentAmount: lb.finalProcurementAmount != null ? Number(lb.finalProcurementAmount) : null,
-                paymentReference: lb.paymentReferenceId || lb.paymentReference || null,
-              };
+            const reqItem: AdminRequestItem = {
+              id: lb.id,
+              bookingId: lb.id,
+              requestId: null,
+              token: lb.token,
+              verificationCode: lb.verificationCode || deriveVerificationCode(lb.token, lb.opaqueQrIdentifier || `qr-${lb.token}`),
+              qrIdentifier: lb.opaqueQrIdentifier || `qr-${lb.token}`,
+              farmerId: lb.farmerId || 'farmer-local',
+              farmerName: lb.farmerName || 'Farmer',
+              farmerMobile: lb.farmerMobile || '',
+              farmerDistrict: lb.farmerDistrict || centreDistrict || '',
+              centreId: lb.centreId || 'centre-br-pat-01',
+              centreName: centreName,
+              centreDistrict: centreDistrict,
+              centreState: centreState || targetState,
+              cropId: lb.cropId || 'crop-wheat',
+              cropName: lb.cropName || 'Wheat',
+              quantityQuintals: qty,
+              preferredDate: lb.bookingDate || lb.preferredDate || lb.assignedDate,
+              preferredTimeSlot: lb.preferredTimeSlot || 'no_preference',
+              assignedDate: lb.assignedDate || lb.bookingDate,
+              assignedStartTime: lb.assignedStartTime || '09:00:00',
+              assignedEndTime: lb.assignedEndTime || '10:00:00',
+              bookingStatus: (lb.bookingStatus || 'booked') as BookingStatus,
+              workflowStatus: normalizedWf,
+              ratePerQuintal: rate,
+              estimatedValue: lb.estimatedValue || qty * rate,
+              finalValue: lb.finalProcurementAmount != null ? Number(lb.finalProcurementAmount) : null,
+              createdAt: lb.createdAt || new Date().toISOString(),
+              paymentStatus: (normalizedWf === 'payment_completed') ? 'completed' : (lb.paymentStatus || null),
+              paymentAmount: lb.finalProcurementAmount != null ? Number(lb.finalProcurementAmount) : null,
+              paymentReference: lb.paymentReferenceId || lb.paymentReference || null,
+            };
 
               let verificationRecords: VerificationRecordItem[] = [];
               const vrStored = localStorage.getItem('smartprocure_verification_records');
@@ -999,8 +1192,7 @@ class AdminService {
             }
           }
         }
-      }
-    } catch (localErr) {
+      } catch (localErr) {
       console.warn('Error reading local bookings in getRequestById:', localErr);
     }
 
@@ -1143,37 +1335,44 @@ class AdminService {
           const { data: { user } } = await supabase.auth.getUser();
           const estVal = (Number(b.quantity) || 0) * 2425;
 
-          const { data: pr } = await supabase
-            .from('procurement_requests')
-            .upsert(
-              {
-                booking_id: b.id,
-                farmer_id: b.farmer_id,
-                centre_id: b.centre_id,
-                crop_id: b.crop_id,
-                submitted_quantity: b.quantity,
-                configured_rate: 2425,
-                estimated_value: estVal,
-                status: 'qr_verified',
-              },
-              { onConflict: 'booking_id' }
-            )
-            .select()
-            .maybeSingle();
+          let pr: any = null;
+          if (isValidUuid(b.id) && isValidUuid(b.farmer_id) && isValidUuid(b.centre_id) && isValidUuid(b.crop_id)) {
+            const { data: prUpsert } = await supabase
+              .from('procurement_requests')
+              .upsert(
+                {
+                  booking_id: b.id,
+                  farmer_id: b.farmer_id,
+                  centre_id: b.centre_id,
+                  crop_id: b.crop_id,
+                  submitted_quantity: b.quantity,
+                  configured_rate: 2425,
+                  estimated_value: estVal,
+                  status: 'qr_verified',
+                },
+                { onConflict: 'booking_id' }
+              )
+              .select()
+              .maybeSingle();
 
-          if (pr) {
-            await supabase.from('verification_records').insert({
-              procurement_request_id: pr.id,
-              verification_type: 'QR verification',
-              status: 'verified',
-              verified_by: user?.id || null,
-              notes: `QR verified at ${new Date().toLocaleTimeString()} by Mandi Officer`,
-              verified_at: new Date().toISOString(),
-            });
+            pr = prUpsert;
+
+            if (pr && isValidUuid(pr.id)) {
+              await supabase.from('verification_records').insert({
+                procurement_request_id: pr.id,
+                verification_type: 'QR verification',
+                status: 'verified',
+                verified_by: user?.id || null,
+                notes: `QR verified at ${new Date().toLocaleTimeString()} by Mandi Officer`,
+                verified_at: new Date().toISOString(),
+              });
+            }
           }
 
           const reqItem: AdminRequestItem = {
             id: b.id,
+            bookingId: b.id,
+            requestId: pr?.id || null,
             token: b.token,
             qrIdentifier: b.qr_identifier,
             farmerId: b.farmer_id,
@@ -1207,91 +1406,92 @@ class AdminService {
       }
     }
 
-    // Fallback: Check local farmer bookings
+    // Fallback: Check local farmer bookings across all user-scoped and legacy keys
     if (typeof window !== 'undefined' && window.localStorage) {
-      const stored = localStorage.getItem('smartprocure_farmer_bookings');
-      if (stored) {
-        try {
-          const list = JSON.parse(stored);
-          const candidate = list.find((row: any) => {
-            if (!row) return false;
-            const code = row.verificationCode || deriveVerificationCode(row.token, row.opaqueQrIdentifier || `qr-${row.token}`);
-            const t = (row.token || '').toUpperCase();
-            const qr = row.opaqueQrIdentifier || '';
-            const rid = row.id || '';
+      try {
+        const list = this.getAllLocalBookings();
+        const candidate = list.find((row: any) => {
+          if (!row) return false;
+          const code = row.verificationCode || deriveVerificationCode(row.token, row.opaqueQrIdentifier || `qr-${row.token}`);
+          const t = (row.token || '').toUpperCase();
+          const qr = row.opaqueQrIdentifier || '';
+          const rid = row.id || '';
 
-            return (
-              (parsedToken && t === parsedToken.toUpperCase()) ||
-              (parsedCode && code === parsedCode) ||
-              t === rawInput.toUpperCase() ||
-              qr === rawInput ||
-              code === rawInput ||
-              rid === rawInput ||
-              (rawInput.length >= 6 && qr.includes(rawInput))
-            );
+          return (
+            (parsedToken && t === parsedToken.toUpperCase()) ||
+            (parsedCode && code === parsedCode) ||
+            t === rawInput.toUpperCase() ||
+            qr === rawInput ||
+            code === rawInput ||
+            rid === rawInput ||
+            (rawInput.length >= 6 && qr.includes(rawInput))
+          );
+        });
+
+        if (candidate) {
+          const resolvedCentre = DEFAULT_CENTRES.find(
+            (c) => c.id === candidate.centreId || c.code === candidate.centreId
+          );
+          const centreState = resolvedCentre?.state || candidate.centreState || candidate.farmerState || '';
+          const matchesState =
+            !targetState ||
+            targetState.toLowerCase() === 'all' ||
+            targetState.toLowerCase() === 'all states' ||
+            centreState.toLowerCase() === targetState.toLowerCase();
+
+          if (!matchesState) {
+            return {
+              success: false,
+              error: `Cross-State Security Violation: This booking belongs to ${centreState}, not ${state}. Access denied.`,
+            };
+          }
+
+          // Sync workflow status to qr_verified in local storage across user stores
+          this.syncLocalBookingWorkflow({
+            bookingId: candidate.id,
+            newStatus: 'qr_verified',
+            notes: `QR verified at ${new Date().toLocaleTimeString()} by Mandi Officer`,
           });
 
-          if (candidate) {
-            const centreState = candidate.centreState || candidate.farmerState || 'Bihar';
-            const isBiharCentre = candidate.centreId?.startsWith('centre-br-') || Boolean(candidate.farmerDistrict);
-            const matchesState =
-              !targetState ||
-              targetState.toLowerCase() === 'all' ||
-              centreState.toLowerCase() === targetState.toLowerCase() ||
-              (targetState.toLowerCase() === 'bihar' && (centreState.toLowerCase() === 'bihar' || isBiharCentre || !centreState));
+          const rate = Number(candidate.ratePerQuintal) || 2425;
+          const qty = Number(candidate.quantityQuintals) || 0;
+          const estVal = qty * rate;
 
-            if (!matchesState) {
-              return {
-                success: false,
-                error: `Cross-State Security Violation: This booking belongs to ${centreState}, not ${state}. Access denied.`,
-              };
-            }
+          const reqItem: AdminRequestItem = {
+            id: candidate.id,
+            bookingId: candidate.id,
+            requestId: null,
+            token: candidate.token,
+            verificationCode: candidate.verificationCode || deriveVerificationCode(candidate.token, candidate.opaqueQrIdentifier || `qr-${candidate.token}`),
+            qrIdentifier: candidate.opaqueQrIdentifier || `qr-${candidate.token}`,
+            farmerId: candidate.farmerId || 'farmer-local',
+            farmerName: candidate.farmerName || 'Farmer',
+            farmerMobile: candidate.farmerMobile || '',
+            farmerDistrict: candidate.farmerDistrict || '',
+            centreId: candidate.centreId,
+            centreName: resolvedCentre?.name || candidate.centreName || 'Mandi Centre',
+            centreDistrict: resolvedCentre?.district || candidate.centreDistrict || candidate.farmerDistrict || '',
+            centreState: centreState || targetState,
+            cropId: candidate.cropId || 'crop-wheat',
+            cropName: candidate.cropName || 'Wheat',
+            quantityQuintals: qty,
+            preferredDate: candidate.bookingDate || candidate.preferredDate || candidate.assignedDate,
+            preferredTimeSlot: candidate.preferredTimeSlot || 'no_preference',
+            assignedDate: candidate.assignedDate || candidate.bookingDate,
+            assignedStartTime: candidate.assignedStartTime || '09:00:00',
+            assignedEndTime: candidate.assignedEndTime || '10:00:00',
+            bookingStatus: 'in_progress',
+            workflowStatus: 'qr_verified',
+            ratePerQuintal: rate,
+            estimatedValue: estVal,
+            finalValue: null,
+            createdAt: candidate.createdAt || new Date().toISOString(),
+          };
 
-            // Sync workflow status to qr_verified in local storage
-            this.syncLocalBookingWorkflow({
-              bookingId: candidate.id,
-              newStatus: 'qr_verified',
-              notes: `QR verified at ${new Date().toLocaleTimeString()} by Mandi Officer`,
-            });
-
-            const rate = Number(candidate.ratePerQuintal) || 2425;
-            const qty = Number(candidate.quantityQuintals) || 0;
-            const estVal = qty * rate;
-
-            const reqItem: AdminRequestItem = {
-              id: candidate.id,
-              token: candidate.token,
-              verificationCode: candidate.verificationCode || deriveVerificationCode(candidate.token, candidate.opaqueQrIdentifier || `qr-${candidate.token}`),
-              qrIdentifier: candidate.opaqueQrIdentifier || `qr-${candidate.token}`,
-              farmerId: candidate.farmerId || 'farmer-local',
-              farmerName: candidate.farmerName || 'Farmer',
-              farmerMobile: candidate.farmerMobile || '',
-              farmerDistrict: candidate.farmerDistrict || '',
-              centreId: candidate.centreId,
-              centreName: candidate.centreName || 'Mandi Centre',
-              centreDistrict: candidate.centreDistrict || candidate.farmerDistrict || '',
-              centreState,
-              cropId: candidate.cropId || 'crop-wheat',
-              cropName: candidate.cropName || 'Wheat',
-              quantityQuintals: qty,
-              preferredDate: candidate.bookingDate || candidate.preferredDate || candidate.assignedDate,
-              preferredTimeSlot: candidate.preferredTimeSlot || 'no_preference',
-              assignedDate: candidate.assignedDate || candidate.bookingDate,
-              assignedStartTime: candidate.assignedStartTime || '09:00:00',
-              assignedEndTime: candidate.assignedEndTime || '10:00:00',
-              bookingStatus: 'in_progress',
-              workflowStatus: 'qr_verified',
-              ratePerQuintal: rate,
-              estimatedValue: estVal,
-              finalValue: null,
-              createdAt: candidate.createdAt || new Date().toISOString(),
-            };
-
-            return { success: true, request: reqItem };
-          }
-        } catch (e) {
-          console.warn('Error reading local bookings in verifyQrIdentifier:', e);
+          return { success: true, request: reqItem };
         }
+      } catch (e) {
+        console.warn('Error reading local bookings in verifyQrIdentifier:', e);
       }
     }
 
@@ -1324,7 +1524,8 @@ class AdminService {
       notes: params.notes,
     });
 
-    if (!isSupabaseConfigured() || !isValidUuid(params.bookingId)) return localUpdated;
+    const bookingUuid = await this.resolveBookingUuid(params.bookingId);
+    if (!isSupabaseConfigured() || !bookingUuid) return localUpdated;
 
     const { data: { user } } = await supabase.auth.getUser();
 
@@ -1351,21 +1552,6 @@ class AdminService {
 
     if (!validDbStatuses.includes(dbStatus)) {
       dbStatus = 'weight_rate_verification';
-    }
-
-    // 1. Get or create procurement_request record safely resolving UUID
-    let bookingUuid = isValidUuid(params.bookingId) ? params.bookingId : null;
-    if (!bookingUuid && params.bookingId) {
-      const cleanId = params.bookingId.trim();
-      const { data: bRow } = await supabase
-        .from('bookings')
-        .select('id')
-        .or(`token.ilike.${cleanId},qr_identifier.ilike.*${cleanId}*`)
-        .limit(1)
-        .maybeSingle();
-      if (bRow?.id && isValidUuid(bRow.id)) {
-        bookingUuid = bRow.id;
-      }
     }
 
     let pr: any = null;
@@ -1498,23 +1684,25 @@ class AdminService {
       });
     }
 
-    // 3. Keep bookings status in sync
-    if (params.newStatus === 'payment_completed') {
-      await supabase
-        .from('bookings')
-        .update({ booking_status: 'completed', updated_at: new Date().toISOString() })
-        .eq('id', params.bookingId);
-    } else if (params.newStatus === 'cancelled' || params.newStatus === 'rejected') {
-      await supabase
-        .from('bookings')
-        .update({ booking_status: 'cancelled', updated_at: new Date().toISOString() })
-        .eq('id', params.bookingId);
-    } else {
-      // Any intermediate step (including procurement_completed / payment_processing) means active
-      await supabase
-        .from('bookings')
-        .update({ booking_status: 'in_progress', updated_at: new Date().toISOString() })
-        .eq('id', params.bookingId);
+    // 3. Keep bookings status in sync using verified UUID
+    if (bookingUuid) {
+      if (params.newStatus === 'payment_completed') {
+        await supabase
+          .from('bookings')
+          .update({ booking_status: 'completed', updated_at: new Date().toISOString() })
+          .eq('id', bookingUuid);
+      } else if (params.newStatus === 'cancelled' || params.newStatus === 'rejected') {
+        await supabase
+          .from('bookings')
+          .update({ booking_status: 'cancelled', updated_at: new Date().toISOString() })
+          .eq('id', bookingUuid);
+      } else {
+        // Any intermediate step (including procurement_completed / payment_processing) means active
+        await supabase
+          .from('bookings')
+          .update({ booking_status: 'in_progress', updated_at: new Date().toISOString() })
+          .eq('id', bookingUuid);
+      }
     }
 
     // 4. Manage payments record & farmer notifications
@@ -1529,15 +1717,17 @@ class AdminService {
     const qty = params.verifiedQuantity || pr.verified_quantity || pr.submitted_quantity || 0;
 
     if (params.newStatus === 'cancelled' || params.newStatus === 'rejected') {
-      // Record queue event
+      // Record queue event with verified UUIDs
       try {
-        await supabase.from('queue_events').insert({
-          booking_id: params.bookingId,
-          centre_id: pr.centre_id,
-          event_type: 'cancelled',
-          event_timestamp: new Date().toISOString(),
-          notes: params.notes || 'Procurement cancelled: Crop quality failed Fair Average Quality (FAQ) standards.',
-        });
+        if (bookingUuid && pr?.centre_id && isValidUuid(pr.centre_id)) {
+          await supabase.from('queue_events').insert({
+            booking_id: bookingUuid,
+            centre_id: pr.centre_id,
+            event_type: 'cancelled',
+            event_time: new Date().toISOString(),
+            notes: params.notes || 'Procurement cancelled: Crop quality failed Fair Average Quality (FAQ) standards.',
+          });
+        }
       } catch (qErr) {
         console.warn('Failed to insert queue cancellation event:', qErr);
       }
@@ -1693,34 +1883,32 @@ class AdminService {
     // Local storage fallback sync
     if (typeof window !== 'undefined' && window.localStorage) {
       try {
-        const stored = localStorage.getItem('smartprocure_farmer_bookings');
-        if (stored) {
-          const list = JSON.parse(stored);
-          const idx = list.findIndex((b: any) => b && (b.id === params.bookingId || b.token === params.bookingId));
-          if (idx !== -1) {
-            list[idx].assignedDate = params.newDate;
-            list[idx].bookingDate = params.newDate;
-            list[idx].assignedStartTime = newStart;
-            list[idx].assignedEndTime = newEnd;
-            list[idx].preferredTimeSlot = slotDisplay;
-            list[idx].bookingStatus = 'booked';
-            list[idx].workflowStatus = 'booking';
-            list[idx].onHold = true;
-            list[idx].holdReason = params.reason || 'Farmer not present during turn call. Put on hold and rescheduled.';
-            localStorage.setItem('smartprocure_farmer_bookings', JSON.stringify(list));
-            window.dispatchEvent(new CustomEvent('smartprocure_booking_updated', { detail: list[idx] }));
-            window.dispatchEvent(new CustomEvent('smartprocure_queue_updated'));
+        const updated = this.mutateLocalBooking(params.bookingId, (b) => {
+          b.assignedDate = params.newDate;
+          b.bookingDate = params.newDate;
+          b.assignedStartTime = newStart;
+          b.assignedEndTime = newEnd;
+          b.preferredTimeSlot = slotDisplay;
+          b.bookingStatus = 'booked';
+          b.workflowStatus = 'booking';
+          b.onHold = true;
+          b.holdReason = params.reason || 'Farmer not present during turn call. Put on hold and rescheduled.';
+          return b;
+        });
 
-            try {
-              notificationService.createNotification({
-                farmerId: list[idx].farmerId || 'farmer-local',
-                type: 'queue',
-                title: 'Procurement Rescheduled (Put On Hold)',
-                message: `Your procurement appointment (Token: ${list[idx].token}) was rescheduled to ${params.newDate}, Slot: ${slotDisplay} at ${list[idx].centreName || 'Bihar Mandi Centre'}. Reason: ${params.reason || 'Farmer not present'}`,
-                bookingId: list[idx].id,
-              });
-            } catch {}
-          }
+        if (updated) {
+          window.dispatchEvent(new CustomEvent('smartprocure_booking_updated', { detail: updated }));
+          window.dispatchEvent(new CustomEvent('smartprocure_queue_updated'));
+
+          try {
+            notificationService.createNotification({
+              farmerId: updated.farmerId || 'farmer-local',
+              type: 'queue',
+              title: 'Procurement Rescheduled (Put On Hold)',
+              message: `Your procurement appointment (Token: ${updated.token}) was rescheduled to ${params.newDate}, Slot: ${slotDisplay} at ${updated.centreName || 'Mandi Centre'}. Reason: ${params.reason || 'Farmer not present'}`,
+              bookingId: updated.id,
+            });
+          } catch {}
         }
       } catch (e) {
         console.warn('Error updating local storage in holdAndRescheduleBooking:', e);
@@ -1732,6 +1920,12 @@ class AdminService {
     try {
       const { data: { user } } = await supabase.auth.getUser();
 
+      const resolvedBookingUuid = await this.resolveBookingUuid(params.bookingId);
+      if (!resolvedBookingUuid) {
+        console.warn(`[holdAndRescheduleBooking] Cannot resolve database UUID for booking "${params.bookingId}". Supabase sync skipped.`);
+        return { success: true };
+      }
+
       const { data: b, error: fetchErr } = await supabase
         .from('bookings')
         .select(`
@@ -1741,7 +1935,7 @@ class AdminService {
           centre_id,
           procurement_centres ( name )
         `)
-        .eq('id', params.bookingId)
+        .eq('id', resolvedBookingUuid)
         .single();
 
       if (fetchErr || !b) {
@@ -1759,7 +1953,7 @@ class AdminService {
           booking_status: 'booked',
           updated_at: new Date().toISOString(),
         })
-        .eq('id', params.bookingId);
+        .eq('id', resolvedBookingUuid);
 
       if (updErr) {
         return { success: false, error: updErr.message };
@@ -1767,14 +1961,16 @@ class AdminService {
 
       // 2. Log hold / reschedule queue event
       const centreName = (b as any).procurement_centres?.name || 'Mandi Centre';
-      const reason = params.reason || 'Farmer not present during turn call. Put on hold and rescheduled.';
-      await supabase.from('queue_events').insert({
-        booking_id: b.id,
-        centre_id: b.centre_id,
-        event_type: 'delayed',
-        notes: `Procurement put on hold: ${reason}. Rescheduled to Date: ${params.newDate}, Slot: ${slotDisplay}`,
-        created_by: user?.id || null,
-      });
+      if (isValidUuid(b.centre_id)) {
+        const reason = params.reason || 'Farmer not present during turn call. Put on hold and rescheduled.';
+        await supabase.from('queue_events').insert({
+          booking_id: b.id,
+          centre_id: b.centre_id,
+          event_type: 'delayed',
+          notes: `Procurement put on hold: ${reason}. Rescheduled to Date: ${params.newDate}, Slot: ${slotDisplay}`,
+          created_by: user?.id || null,
+        });
+      }
 
       // 3. Send notification to farmer
       await this.dispatchFarmerNotification({
@@ -1804,27 +2000,24 @@ class AdminService {
   }): Promise<boolean> {
     if (params.bookingId && typeof window !== 'undefined' && window.localStorage) {
       try {
-        const stored = localStorage.getItem('smartprocure_farmer_bookings');
-        if (stored) {
-          const list = JSON.parse(stored);
-          const idx = list.findIndex((b: any) => b && (b.id === params.bookingId || b.token === params.bookingId));
-          if (idx !== -1) {
-            let targetStatus: BookingStatus | null = null;
-            if (params.eventType === 'checked_in' || params.eventType === 'processing_started') {
-              targetStatus = 'in_progress';
-            } else if (params.eventType === 'processing_completed') {
-              targetStatus = 'completed';
-            } else if (params.eventType === 'cancelled') {
-              targetStatus = 'cancelled';
-            } else if (params.eventType === 'no_show') {
-              targetStatus = 'no_show';
-            }
-            if (targetStatus) {
-              list[idx].bookingStatus = targetStatus;
-              localStorage.setItem('smartprocure_farmer_bookings', JSON.stringify(list));
-              window.dispatchEvent(new CustomEvent('smartprocure_booking_updated', { detail: list[idx] }));
-              window.dispatchEvent(new CustomEvent('smartprocure_queue_updated'));
-            }
+        let targetStatus: BookingStatus | null = null;
+        if (params.eventType === 'checked_in' || params.eventType === 'processing_started') {
+          targetStatus = 'in_progress';
+        } else if (params.eventType === 'processing_completed') {
+          targetStatus = 'completed';
+        } else if (params.eventType === 'cancelled') {
+          targetStatus = 'cancelled';
+        } else if (params.eventType === 'no_show') {
+          targetStatus = 'no_show';
+        }
+        if (targetStatus) {
+          const updated = this.mutateLocalBooking(params.bookingId, (b) => {
+            b.bookingStatus = targetStatus;
+            return b;
+          });
+          if (updated) {
+            window.dispatchEvent(new CustomEvent('smartprocure_booking_updated', { detail: updated }));
+            window.dispatchEvent(new CustomEvent('smartprocure_queue_updated'));
           }
         }
       } catch (e) {
@@ -1834,12 +2027,47 @@ class AdminService {
 
     if (!isSupabaseConfigured()) return true;
 
+    // Resolve booking UUID safely before inserting into PostgreSQL
+    let resolvedBookingUuid: string | null = null;
+    if (params.bookingId) {
+      resolvedBookingUuid = await this.resolveBookingUuid(params.bookingId);
+      if (!resolvedBookingUuid) {
+        console.warn(
+          `[adminService.logQueueAction] Skipping queue_events insert: cannot resolve valid booking UUID for identifier "${params.bookingId}".`
+        );
+        return true;
+      }
+    }
+
+    // Resolve centre UUID safely
+    let resolvedCentreUuid: string | null = isValidUuid(params.centreId) ? params.centreId : null;
+    if (!resolvedCentreUuid) {
+      try {
+        const { data: cFound } = await supabase
+          .from('procurement_centres')
+          .select('id')
+          .or(`code.eq.${params.centreId},name.ilike.%${params.centreId}%`)
+          .limit(1)
+          .maybeSingle();
+        if (cFound?.id && isValidUuid(cFound.id)) {
+          resolvedCentreUuid = cFound.id;
+        }
+      } catch {}
+    }
+
+    if (!resolvedCentreUuid) {
+      console.warn(
+        `[adminService.logQueueAction] Skipping queue_events insert: cannot resolve valid centre UUID for centreId "${params.centreId}".`
+      );
+      return true;
+    }
+
     const { data: { user } } = await supabase.auth.getUser();
 
-    // 1. Insert into public.queue_events
+    // 1. Insert into public.queue_events with strictly validated UUIDs
     const { error: eventError } = await supabase.from('queue_events').insert({
-      centre_id: params.centreId,
-      booking_id: params.bookingId || null,
+      centre_id: resolvedCentreUuid,
+      booking_id: resolvedBookingUuid,
       event_type: params.eventType,
       delay_minutes: params.delayMinutes || 0,
       notes: params.notes || null,
@@ -1850,8 +2078,8 @@ class AdminService {
       console.warn('Queue event log error:', eventError);
     }
 
-    // 2. Sync corresponding booking status in public.bookings
-    if (params.bookingId) {
+    // 2. Sync corresponding booking status in public.bookings using verified booking UUID
+    if (resolvedBookingUuid) {
       let targetStatus: BookingStatus | null = null;
 
       if (params.eventType === 'checked_in' || params.eventType === 'processing_started') {
@@ -1868,7 +2096,7 @@ class AdminService {
         await supabase
           .from('bookings')
           .update({ booking_status: targetStatus })
-          .eq('id', params.bookingId);
+          .eq('id', resolvedBookingUuid);
       }
     }
 
@@ -2261,14 +2489,7 @@ class AdminService {
       const localNotifs = await notificationService.getNotifications();
       let localBookings: any[] = [];
       if (typeof window !== 'undefined') {
-        const stored = localStorage.getItem('smartprocure_farmer_bookings');
-        if (stored) {
-          try {
-            localBookings = JSON.parse(stored);
-          } catch {
-            localBookings = [];
-          }
-        }
+        localBookings = this.getAllLocalBookings();
       }
       const bookingMap = new Map<string, any>(localBookings.map((b: any) => [b.id, b]));
 

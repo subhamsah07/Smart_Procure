@@ -3,6 +3,7 @@ import { User, Session, AuthError } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { FarmerProfile, IndianState, BankAccountDetails } from '../types';
 import { MOCK_FARMER } from '../data/mockData';
+import { bookingService } from '../services/bookingService';
 
 export interface FarmerRegistrationData {
   fullName: string;
@@ -770,7 +771,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signOut = async (): Promise<void> => {
     setIsLoading(true);
     try {
-      await supabase.auth.signOut();
+      if (isSupabaseConfigured()) {
+        await supabase.auth.signOut();
+      }
     } catch (err) {
       console.warn('Sign out warning:', err);
     } finally {
@@ -780,6 +783,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem(LOCAL_PROFILE_KEY);
       // Safely remove legacy un-scoped global booking cache to prevent leaking into next account
       localStorage.removeItem('smartprocure_farmer_bookings');
+      // Reset in-memory booking singleton cache so previous user's records cannot leak
+      bookingService.resetLocalCache();
       setIsLoading(false);
     }
   };

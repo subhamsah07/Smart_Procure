@@ -55,6 +55,8 @@ export interface AdminCentreItem {
 
 export interface AdminRequestItem {
   id: string;
+  requestId?: string | null;
+  bookingId?: string;
   token: string;
   verificationCode?: string;
   qrIdentifier: string;

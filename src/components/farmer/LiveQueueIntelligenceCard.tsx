@@ -1,4 +1,5 @@
 import * as React from 'react';
+import clsx from 'clsx';
 import {
   Clock,
   AlertTriangle,
@@ -114,57 +115,17 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
       return telemetry.upcomingProcessFlow;
     }
 
-    const currentPos = telemetry?.position || 4;
+    const currentPos = telemetry?.position || 1;
     return [
       {
-        position: 1,
-        token: 'SP7K3M',
-        stageName: 'Electronic Weighbridge Verification',
-        status: 'PROCESSING',
-        isCurrentUser: token === 'SP7K3M',
-        farmerNameHint: 'Active Vehicle',
-        crop: `${booking.cropName} (30 Q)`,
-        estimatedMinutesAway: 0,
-      },
-      {
-        position: 2,
-        token: 'SP7K3N',
-        stageName: 'Gate Ingress & Sampling',
-        status: 'WAITING',
-        isCurrentUser: token === 'SP7K3N',
-        farmerNameHint: 'Mandi Ingress',
-        crop: 'Wheat (40 Q)',
-        estimatedMinutesAway: 15,
-      },
-      {
-        position: 3,
-        token: 'SP7K3P',
-        stageName: 'Yard Staging & Paperwork',
-        status: 'WAITING',
-        isCurrentUser: token === 'SP7K3P',
-        farmerNameHint: 'Yard Staging',
-        crop: 'Wheat (25 Q)',
-        estimatedMinutesAway: 28,
-      },
-      {
         position: currentPos,
-        token: token || 'YOUR TOKEN',
-        stageName: 'Scheduled Intake Slot (Pre-Gate Telemetry)',
-        status: status === 'BOOKED' ? 'SCHEDULED' : 'WAITING',
+        token: token || booking.token || 'YOUR TOKEN',
+        stageName: status === 'PROCESSING' ? 'Electronic Weighbridge Verification' : 'Scheduled Intake Slot (Pre-Gate Telemetry)',
+        status: status === 'PROCESSING' ? 'PROCESSING' : status === 'BOOKED' ? 'SCHEDULED' : 'WAITING',
         isCurrentUser: true,
         farmerNameHint: 'Your Token',
         crop: `${booking.cropName} (${booking.quantityQuintals} Q)`,
-        estimatedMinutesAway: telemetry?.estimatedWaitMinutes || 35,
-      },
-      {
-        position: currentPos + 1,
-        token: 'TK-9402',
-        stageName: 'Subsequent Intake Slot',
-        status: 'SCHEDULED',
-        isCurrentUser: false,
-        farmerNameHint: 'Next Intake',
-        crop: 'Paddy (50 Q)',
-        estimatedMinutesAway: (telemetry?.estimatedWaitMinutes || 35) + 18,
+        estimatedMinutesAway: telemetry?.estimatedWaitMinutes || 0,
       },
     ];
   }, [telemetry, token, booking, status]);
@@ -174,26 +135,31 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
   // 2. Farmer in Queue (the farmer tracking their token in queue)
   // 3. Upcoming Procurement (next scheduled intake in line)
   const currentProcurement = React.useMemo(() => {
-    const adminToken = telemetry?.currentServingToken || 'SP7K3M';
+    const rawServingToken = telemetry?.currentServingToken;
+    const isUserActive = status === 'PROCESSING' || (Boolean(rawServingToken) && Boolean(token) && token.toUpperCase() === rawServingToken?.toUpperCase());
+    const hasRealServing = Boolean(rawServingToken) || isUserActive;
+    const adminToken = isUserActive ? (token || booking.token) : (rawServingToken || null);
     const adminPos = telemetry?.currentServingPosition || 1;
-    const isUserActive = status === 'PROCESSING' || (token && token.toUpperCase() === adminToken.toUpperCase());
 
     return {
+      hasActiveToken: hasRealServing,
       position: adminPos,
-      token: isUserActive ? (token || booking.token || 'SP7K3M') : adminToken,
-      estimatedTime: 'Active Now',
+      token: adminToken || 'Counter Standby',
+      estimatedTime: hasRealServing ? 'Active Now' : 'Standby',
       isCurrentUser: isUserActive,
-      stageName: 'Electronic Weighbridge & Sampling',
+      stageName: hasRealServing ? 'Electronic Weighbridge & Sampling' : 'Counter Standby — Ready for Ingress',
       crop: isUserActive
         ? `${booking.cropName} (${booking.quantityQuintals} Q)`
-        : `${booking.cropName || 'Wheat'} (30 Q)`,
+        : hasRealServing
+        ? `${booking.cropName || 'Produce'} (30 Q)`
+        : 'Awaiting Next Token',
     };
   }, [telemetry, token, booking, status]);
 
   const farmerProcurement = React.useMemo(() => {
     const isUserActive = status === 'PROCESSING' || (token && token.toUpperCase() === (telemetry?.currentServingToken || '').toUpperCase());
-    const farmerPos = isUserActive ? 1 : (telemetry?.position || (telemetry?.farmersAhead !== undefined ? telemetry.farmersAhead + 1 : 2));
-    const farmerToken = token || booking.token || 'SP-TOKEN';
+    const farmerPos = isUserActive ? 1 : (telemetry?.position || (telemetry?.farmersAhead !== undefined ? telemetry.farmersAhead + 1 : 1));
+    const farmerToken = token || booking.token || 'YOUR TOKEN';
     const waitMins = isUserActive ? 0 : (telemetry?.estimatedWaitMinutes || Math.max(5, (farmerPos - 1) * 18));
     
     let formattedWait: string;
@@ -222,17 +188,19 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
   const upcomingProcurement = React.useMemo(() => {
     const farmerPos = farmerProcurement.position;
     const upcomingStep = processSteps.find((s) => !s.isCurrentUser && s.position > farmerPos);
+    const hasUpcoming = Boolean(upcomingStep && upcomingStep.token);
     const upcomingPos = upcomingStep?.position || (farmerPos + 1);
-    const upcomingToken = upcomingStep?.token || 'TK-9402';
+    const upcomingToken = hasUpcoming ? upcomingStep!.token : null;
     const waitBase = Math.max(15, upcomingPos * 18);
 
     return {
+      hasUpcoming,
       position: upcomingPos,
-      token: upcomingToken,
-      estimatedTime: `~${waitBase} min`,
+      token: upcomingToken || 'Awaiting Next Token',
+      estimatedTime: hasUpcoming ? `~${waitBase} min` : 'Standby',
       isCurrentUser: false,
-      stageName: 'Next Scheduled Intake',
-      crop: upcomingStep?.crop || 'Wheat (40 Q)',
+      stageName: hasUpcoming ? (upcomingStep?.stageName || 'Next Scheduled Intake') : 'Yard Staging Open',
+      crop: hasUpcoming ? (upcomingStep?.crop || 'Agricultural Produce') : 'Awaiting Next Slot',
     };
   }, [processSteps, farmerProcurement]);
 
@@ -567,7 +535,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                         </span>
                       </div>
                       <p className="text-xs text-amber-900/90 dark:text-amber-300/80 leading-relaxed max-w-2xl">
-                        You can view your <strong>live procurement position (#{telemetry?.position || 4})</strong> and estimated time before arriving at the mandi gate. Scheduled slot: <strong>{booking.slotStartTime} – {booking.slotEndTime}</strong>.
+                        You can view your <strong>live procurement position (#{telemetry?.position ?? 1})</strong> and estimated time before arriving at the mandi gate. Scheduled slot: <strong>{booking.slotStartTime} – {booking.slotEndTime}</strong>.
                       </p>
                     </div>
                   </div>
@@ -577,7 +545,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                       Live Queue Est.
                     </span>
                     <span className="text-lg font-black font-mono text-slate-900 dark:text-white tabular-nums">
-                      #{telemetry?.position || 4} in Mandi
+                      #{telemetry?.position ?? 1} in Mandi
                     </span>
                   </div>
                 </div>
@@ -784,7 +752,14 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase tracking-wider block">
                           Token No.
                         </span>
-                        <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-slate-900 dark:text-white block mt-0.5 tabular-nums">
+                        <span
+                          className={clsx(
+                            'block mt-0.5',
+                            currentProcurement.hasActiveToken
+                              ? 'text-2xl sm:text-3xl font-black font-mono tracking-tight text-slate-900 dark:text-white tabular-nums'
+                              : 'text-base sm:text-lg font-bold text-slate-700 dark:text-neutral-300 tracking-tight'
+                          )}
+                        >
                           {currentProcurement.token}
                         </span>
                       </div>
@@ -797,7 +772,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                           Position
                         </span>
                         <span className="text-sm sm:text-base font-black text-slate-900 dark:text-white block mt-0.5">
-                          Position #{currentProcurement.position}
+                          {currentProcurement.hasActiveToken ? `Position #${currentProcurement.position}` : 'Standby'}
                         </span>
                       </div>
                       <div>
@@ -870,7 +845,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                           3. Upcoming Procurement
                         </span>
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-slate-600 dark:text-neutral-400 bg-slate-100 dark:bg-neutral-800 px-2 py-0.5 rounded border border-slate-200 dark:border-neutral-700">
-                          NEXT IN LINE
+                          {upcomingProcurement.hasUpcoming ? 'NEXT IN LINE' : 'AWAITING'}
                         </span>
                       </div>
 
@@ -879,7 +854,14 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase tracking-wider block">
                           Token No.
                         </span>
-                        <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-slate-900 dark:text-white block mt-0.5 tabular-nums">
+                        <span
+                          className={clsx(
+                            'block mt-0.5',
+                            upcomingProcurement.hasUpcoming
+                              ? 'text-2xl sm:text-3xl font-black font-mono tracking-tight text-slate-900 dark:text-white tabular-nums'
+                              : 'text-base sm:text-lg font-bold text-slate-500 dark:text-neutral-400 tracking-tight'
+                          )}
+                        >
                           {upcomingProcurement.token}
                         </span>
                       </div>
@@ -892,7 +874,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                           Position
                         </span>
                         <span className="text-sm sm:text-base font-black text-slate-900 dark:text-white block mt-0.5">
-                          Position #{upcomingProcurement.position}
+                          {upcomingProcurement.hasUpcoming ? `Position #${upcomingProcurement.position}` : 'Standby'}
                         </span>
                       </div>
                       <div>
@@ -912,7 +894,22 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                   <div className="flex items-center gap-2">
                     <Info className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <span>
-                      Active token with admin: <strong className="font-mono text-slate-900 dark:text-white font-bold">{currentProcurement.token}</strong> (Pos #{currentProcurement.position}) ➔ Your token: <strong className="font-mono text-amber-700 dark:text-amber-400 font-bold">{farmerProcurement.token}</strong> (Pos #{farmerProcurement.position}) ➔ Upcoming: <strong className="font-mono text-slate-900 dark:text-white font-bold">{upcomingProcurement.token}</strong> (Pos #{upcomingProcurement.position}).
+                      {currentProcurement.hasActiveToken ? (
+                        <>
+                          Active counter: <strong className="font-mono text-slate-900 dark:text-white font-bold">{currentProcurement.token}</strong> (Pos #{currentProcurement.position}) ➔{' '}
+                        </>
+                      ) : (
+                        <>
+                          Active counter: <strong className="text-slate-700 dark:text-neutral-300 font-semibold">Counter Standby</strong> ➔{' '}
+                        </>
+                      )}
+                      Your token: <strong className="font-mono text-amber-700 dark:text-amber-400 font-bold">{farmerProcurement.token}</strong> (Pos #{farmerProcurement.position})
+                      {upcomingProcurement.hasUpcoming && (
+                        <>
+                          {' '}➔ Upcoming: <strong className="font-mono text-slate-900 dark:text-white font-bold">{upcomingProcurement.token}</strong> (Pos #{upcomingProcurement.position})
+                        </>
+                      )}
+                      .
                     </span>
                   </div>
                   <span className="font-semibold text-emerald-700 dark:text-emerald-400 shrink-0">

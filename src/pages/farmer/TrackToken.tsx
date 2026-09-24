@@ -188,6 +188,10 @@ export const TrackToken: React.FC = () => {
       // Query database/service directly
       const fetched = await bookingService.getBookingByToken(clean);
       if (fetched) {
+        if (user?.id && fetched.farmerId && fetched.farmerId !== user.id) {
+          setSearchError('This procurement booking is registered under a different farmer account.');
+          return;
+        }
         setBookings((prev) => {
           if (!prev.some((b) => b.id === fetched.id || b.token === fetched.token)) {
             return [fetched, ...prev];
