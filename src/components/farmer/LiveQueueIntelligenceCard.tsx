@@ -30,14 +30,16 @@ import {
 interface LiveQueueIntelligenceCardProps {
   booking: ProcurementBooking;
   onBookingUpdated?: () => void;
+  initialTelemetry?: FarmerLiveTelemetry | null;
 }
 
 export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps> = ({
   booking,
   onBookingUpdated,
+  initialTelemetry = null,
 }) => {
-  const [telemetry, setTelemetry] = React.useState<FarmerLiveTelemetry | null>(null);
-  const [isLoading, setIsLoading] = React.useState<boolean>(true);
+  const [telemetry, setTelemetry] = React.useState<FarmerLiveTelemetry | null>(initialTelemetry);
+  const [isLoading, setIsLoading] = React.useState<boolean>(!initialTelemetry);
   const [elapsedSeconds, setElapsedSeconds] = React.useState<number>(0);
 
   const centreId = booking.centreId;
@@ -54,6 +56,13 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
       setIsLoading(false);
     }
   }, [booking]);
+
+  React.useEffect(() => {
+    if (initialTelemetry) {
+      setTelemetry(initialTelemetry);
+      setIsLoading(false);
+    }
+  }, [initialTelemetry]);
 
   // Live real-time subscription (Supabase Realtime + local store)
   React.useEffect(() => {

@@ -201,6 +201,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSession(null);
         setProfile(null);
         localStorage.removeItem(LOCAL_PROFILE_KEY);
+        // Safely remove legacy un-scoped global booking cache to prevent leaking into next account
+        localStorage.removeItem('smartprocure_farmer_bookings');
       }
 
       setIsLoading(false);
@@ -776,6 +778,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(null);
       setProfile(null);
       localStorage.removeItem(LOCAL_PROFILE_KEY);
+      // Safely remove legacy un-scoped global booking cache to prevent leaking into next account
+      localStorage.removeItem('smartprocure_farmer_bookings');
       setIsLoading(false);
     }
   };

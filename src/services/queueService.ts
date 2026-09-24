@@ -192,49 +192,11 @@ class QueueService {
       }
     }
 
-    // Seed realistic operational data: SP7K3M is currently processing, SP7K3N and SP7K3P are waiting
+    // Default real-time operational store: clean empty queue awaiting live gate arrivals
     const defaultStore: LocalQueueStore = {
-      checkedInEntries: [
-        {
-          bookingId: 'book-seed-01',
-          token: 'SP7K3M',
-          position: 1,
-          status: 'PROCESSING',
-          farmerNameHint: 'Gurdeep S.',
-          crop: 'Wheat (30 Q)',
-          quantityQuintals: 30,
-          checkInTimestamp: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-          startedProcessingTimestamp: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-          isCurrentUser: false,
-          stageName: 'Electronic Weighbridge Verification',
-        },
-        {
-          bookingId: 'book-seed-02',
-          token: 'SP7K3N',
-          position: 2,
-          status: 'WAITING',
-          farmerNameHint: 'Balwinder K.',
-          crop: 'Wheat (20 Q)',
-          quantityQuintals: 20,
-          checkInTimestamp: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-          isCurrentUser: false,
-          stageName: 'Waiting for Weighbridge',
-        },
-        {
-          bookingId: 'book-seed-03',
-          token: 'SP7K3P',
-          position: 3,
-          status: 'WAITING',
-          farmerNameHint: 'Harpreet S.',
-          crop: 'Wheat (40 Q)',
-          quantityQuintals: 40,
-          checkInTimestamp: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-          isCurrentUser: false,
-          stageName: 'Waiting for Weighbridge',
-        },
-      ],
+      checkedInEntries: [],
       completedEntries: [],
-      completedDurations: [24, 31, 27],
+      completedDurations: [20],
       activeDelay: {
         isActive: false,
         reason: 'NONE',
