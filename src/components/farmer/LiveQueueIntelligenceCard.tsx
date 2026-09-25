@@ -20,6 +20,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { Badge } from '../ui/Badge';
 import { ProcurementBooking } from '../../types';
 import {
@@ -39,6 +40,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
   onBookingUpdated,
   initialTelemetry = null,
 }) => {
+  const { t } = useTranslation();
   const [telemetry, setTelemetry] = React.useState<FarmerLiveTelemetry | null>(initialTelemetry);
   const [isLoading, setIsLoading] = React.useState<boolean>(!initialTelemetry);
   const [elapsedSeconds, setElapsedSeconds] = React.useState<number>(0);
@@ -528,24 +530,29 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-amber-950 dark:text-amber-200 font-extrabold text-sm sm:text-base">
-                          Pre-Gate Live Telemetry Enabled
+                          {t('trackToken.preGateTelemetry', 'Pre-Gate Live Telemetry Enabled')}
                         </span>
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-200 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
-                          Gate Ingress Pending
+                          {t('trackToken.gateIngressPending', 'Gate Ingress Pending')}
                         </span>
                       </div>
                       <p className="text-xs text-amber-900/90 dark:text-amber-300/80 leading-relaxed max-w-2xl">
-                        You can view your <strong>live procurement position (#{telemetry?.position ?? 1})</strong> and estimated time before arriving at the mandi gate. Scheduled slot: <strong>{booking.slotStartTime} – {booking.slotEndTime}</strong>.
+                        {t('trackToken.preGateBannerDesc', {
+                          pos: telemetry?.position ?? 1,
+                          start: booking.slotStartTime,
+                          end: booking.slotEndTime,
+                          defaultValue: `You can view your live procurement position (#${telemetry?.position ?? 1}) and estimated time before arriving at the mandi gate. Scheduled slot: ${booking.slotStartTime} – ${booking.slotEndTime}.`
+                        })}
                       </p>
                     </div>
                   </div>
 
                   <div className="shrink-0 flex sm:flex-col items-center sm:items-end justify-between gap-1 bg-white/80 dark:bg-neutral-900/80 px-3.5 py-2.5 rounded-xl border border-amber-200 dark:border-amber-800/40">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400">
-                      Live Queue Est.
+                      {t('trackToken.liveQueueEst', 'Live Queue Est.')}
                     </span>
                     <span className="text-lg font-black font-mono text-slate-900 dark:text-white tabular-nums">
-                      #{telemetry?.position ?? 1} in Mandi
+                      {t('trackToken.inMandi', { pos: telemetry?.position ?? 1, defaultValue: `#${telemetry?.position ?? 1} in Mandi` })}
                     </span>
                   </div>
                 </div>
@@ -558,29 +565,29 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                 <div>
                   <div className="flex items-center gap-1.5 text-[11px] font-extrabold tracking-wider uppercase text-emerald-800 dark:text-emerald-400">
                     <Leaf className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                    <span>LIVE QUEUE TELEMETRY</span>
+                    <span>{t('trackToken.liveQueueTelemetry', 'LIVE QUEUE TELEMETRY')}</span>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mt-1">
                     <span className="text-xl sm:text-2xl font-black font-mono text-slate-900 dark:text-white tracking-tight">
-                      Token: {telemetry?.token || token}
+                      {t('dashboard.token', 'Token')}: {telemetry?.token || token}
                     </span>
                     {status === 'WAITING' ? (
                       <Badge variant="success" size="sm" className="font-bold gap-1 bg-emerald-600 text-white border-none">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 animate-ping" />
-                        CHECKED_IN &bull; IN QUEUE
+                        {t('trackToken.checkedInInQueue', 'CHECKED_IN • IN QUEUE')}
                       </Badge>
                     ) : (
                       <Badge variant="outline" size="sm" className="font-semibold text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40">
-                        PRE-GATE LIVE TRACKING
+                        {t('trackToken.preGateLiveTracking', 'PRE-GATE LIVE TRACKING')}
                       </Badge>
                     )}
                   </div>
                 </div>
 
                 <div className="text-xs text-slate-500 dark:text-neutral-400 flex flex-wrap items-center gap-2">
-                  <span>Centre: <strong className="text-slate-800 dark:text-neutral-200">{telemetry?.centreName || booking.centreName}</strong></span>
+                  <span>{t('trackToken.centreLabel', 'Centre')}: <strong className="text-slate-800 dark:text-neutral-200">{telemetry?.centreName || booking.centreName}</strong></span>
                   <span>&bull;</span>
-                  <span>Updated: <strong className="text-slate-700 dark:text-neutral-300">{telemetry?.lastUpdated || 'just now'}</strong></span>
+                  <span>{t('trackToken.updatedLabel', 'Updated')}: <strong className="text-slate-700 dark:text-neutral-300">{telemetry?.lastUpdated || t('trackToken.justNow', 'just now')}</strong></span>
                 </div>
               </div>
 
@@ -595,7 +602,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                   }`}
                 >
                   <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-400 block">
-                    Queue Position
+                    {t('trackToken.queuePosition', 'Queue Position')}
                   </span>
                   <div className="mt-1 flex items-baseline gap-1">
                     <motion.span
@@ -609,17 +616,17 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                   </div>
                   <span className="text-[10px] text-slate-600 dark:text-neutral-400 font-medium mt-1 block">
                     {telemetry?.position === 1
-                      ? 'Next in line for weighbridge'
+                      ? t('trackToken.nextInLine', 'Next in line for weighbridge')
                       : status === 'WAITING'
-                      ? 'Based on gate check-in'
-                      : 'Pre-gate live sequence'}
+                      ? t('trackToken.basedOnCheckin', 'Based on gate check-in')
+                      : t('trackToken.preGateSequence', 'Pre-gate live sequence')}
                   </span>
                 </div>
 
                 {/* 2. FARMERS AHEAD */}
                 <div className="p-4 rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50/80 dark:bg-neutral-900/60">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-neutral-400 block">
-                    Farmers Ahead
+                    {t('trackToken.farmersAhead', 'Farmers Ahead')}
                   </span>
                   <div className="mt-1 flex items-baseline gap-1">
                     <motion.span
@@ -630,12 +637,14 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                     >
                       {telemetry ? telemetry.farmersAhead : 3}
                     </motion.span>
-                    <span className="text-xs text-slate-500 dark:text-neutral-400 font-medium">ahead</span>
+                    <span className="text-xs text-slate-500 dark:text-neutral-400 font-medium">
+                      {t('trackToken.ahead', 'ahead')}
+                    </span>
                   </div>
                   <span className="text-[10px] text-slate-500 dark:text-neutral-400 font-medium mt-1 block">
                     {telemetry && telemetry.farmersAhead === 0
-                      ? 'You are next in line!'
-                      : 'Vehicles before intake'}
+                      ? t('trackToken.youAreNext', 'You are next in line!')
+                      : t('trackToken.vehiclesBeforeIntake', 'Vehicles before intake')}
                   </span>
                 </div>
 
@@ -648,7 +657,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                   }`}
                 >
                   <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400 block">
-                    Estimated Wait Time
+                    {t('trackToken.estimatedWaitTime', 'Estimated Wait Time')}
                   </span>
                   <div className="mt-1">
                     <motion.span
@@ -662,8 +671,8 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                   </div>
                   <span className="text-[10px] text-slate-600 dark:text-neutral-400 font-medium mt-1 block">
                     {telemetry?.isBaselineEta
-                      ? 'Dynamic rolling estimate'
-                      : 'Real-time velocity tracking'}
+                      ? t('trackToken.dynamicRollingEst', 'Dynamic rolling estimate')
+                      : t('trackToken.realTimeVelocity', 'Real-time velocity tracking')}
                   </span>
                 </div>
 
@@ -676,23 +685,25 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                   }`}
                 >
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-neutral-400 block">
-                    Centre Status
+                    {t('trackToken.centreStatus', 'Centre Status')}
                   </span>
                   <div className="mt-1 flex items-center gap-1.5">
                     {telemetry?.activeDelay?.isActive ? (
                       <span className="text-sm font-black text-amber-900 dark:text-amber-300 tracking-tight flex items-center gap-1">
                         <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
-                        DELAY IN YARD
+                        {t('trackToken.delayInYard', 'DELAY IN YARD')}
                       </span>
                     ) : (
                       <span className="text-sm font-black text-emerald-900 dark:text-emerald-300 tracking-tight flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                        OPERATING NORMALLY
+                        {t('trackToken.operatingNormally', 'OPERATING NORMALLY')}
                       </span>
                     )}
                   </div>
                   <span className="text-[10px] text-slate-600 dark:text-neutral-400 font-medium mt-1 block truncate">
-                    {telemetry?.activeDelay?.isActive ? 'Weighbridge queue delayed' : 'Intake gates running fast'}
+                    {telemetry?.activeDelay?.isActive
+                      ? t('trackToken.weighbridgeDelayed', 'Weighbridge queue delayed')
+                      : t('trackToken.intakeGatesFast', 'Intake gates running fast')}
                   </span>
                 </div>
               </div>
@@ -708,13 +719,13 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                     </div>
                     <div>
                       <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2 flex-wrap">
-                        <span>Live Procurement Queue Process</span>
+                        <span>{t('trackToken.processPipelineTitle', 'Live Procurement Queue Process')}</span>
                         <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
-                          Active Yard Sequence
+                          {t('trackToken.activeYardSequence', 'Active Yard Sequence')}
                         </span>
                       </h4>
                       <p className="text-xs text-slate-500 dark:text-neutral-400">
-                        Current Admin Procurement ➔ Farmer in Queue ➔ Upcoming Procurement
+                        {t('trackToken.processPipelineSubtitle', 'Current Admin Procurement ➔ Farmer in Queue ➔ Upcoming Procurement')}
                       </p>
                     </div>
                   </div>
@@ -722,7 +733,7 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                   <div className="flex items-center gap-2 text-xs">
                     <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300/80 dark:border-emerald-700 text-emerald-800 dark:text-emerald-300 font-semibold">
                       <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                      Admin Counter: #{currentProcurement.position} ({currentProcurement.token})
+                      {t('trackToken.adminCounter', 'Admin Counter')}: #{currentProcurement.position} ({currentProcurement.token})
                     </span>
                   </div>
                 </div>
@@ -740,17 +751,17 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
                           <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                          1. Current Procurement
+                          {t('trackToken.currentProcurement', '1. Current Procurement')}
                         </span>
                         <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded border border-emerald-300 dark:border-emerald-700">
-                          DONE BY ADMIN
+                          {t('trackToken.doneByAdmin', 'DONE BY ADMIN')}
                         </span>
                       </div>
 
                       {/* Focused Token No */}
                       <div className="bg-white/90 dark:bg-neutral-900/90 p-3 rounded-xl border border-emerald-200 dark:border-emerald-800/60">
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase tracking-wider block">
-                          Token No.
+                          {t('trackToken.tokenNo', 'Token No.')}
                         </span>
                         <span
                           className={clsx(
@@ -769,15 +780,17 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                     <div className="mt-4 pt-3 border-t border-emerald-200/80 dark:border-emerald-800/60 grid grid-cols-2 gap-2 text-xs">
                       <div>
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase block">
-                          Position
+                          {t('trackToken.positionLabel', 'Position')}
                         </span>
                         <span className="text-sm sm:text-base font-black text-slate-900 dark:text-white block mt-0.5">
-                          {currentProcurement.hasActiveToken ? `Position #${currentProcurement.position}` : 'Standby'}
+                          {currentProcurement.hasActiveToken
+                            ? t('trackToken.positionNum', { pos: currentProcurement.position, defaultValue: `Position #${currentProcurement.position}` })
+                            : t('trackToken.standby', 'Standby')}
                         </span>
                       </div>
                       <div>
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase block">
-                          Estimated Time
+                          {t('trackToken.estimatedWaitTime', 'Estimated Time')}
                         </span>
                         <span className="text-sm sm:text-base font-black text-emerald-700 dark:text-emerald-400 block mt-0.5">
                           {currentProcurement.estimatedTime}
@@ -797,17 +810,17 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-xs font-bold uppercase tracking-wider text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
                           <UserCheck className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-                          2. Farmer in Queue
+                          {t('trackToken.farmerInQueue', '2. Farmer in Queue')}
                         </span>
                         <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-amber-900 dark:text-amber-200 bg-amber-200/90 dark:bg-amber-900/70 px-2 py-0.5 rounded border border-amber-400/70">
-                          YOUR TOKEN
+                          {t('trackToken.yourToken', 'YOUR TOKEN')}
                         </span>
                       </div>
 
                       {/* Focused Token No */}
                       <div className="bg-white/90 dark:bg-neutral-900/90 p-3 rounded-xl border border-amber-200 dark:border-amber-800/60">
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase tracking-wider block">
-                          Token No.
+                          {t('trackToken.tokenNo', 'Token No.')}
                         </span>
                         <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-slate-900 dark:text-white block mt-0.5 tabular-nums">
                           {farmerProcurement.token}
@@ -819,15 +832,15 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                     <div className="mt-4 pt-3 border-t border-amber-200/80 dark:border-amber-800/60 grid grid-cols-2 gap-2 text-xs">
                       <div>
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase block">
-                          Position
+                          {t('trackToken.positionLabel', 'Position')}
                         </span>
                         <span className="text-sm sm:text-base font-black text-slate-900 dark:text-white block mt-0.5">
-                          Position #{farmerProcurement.position}
+                          {t('trackToken.positionNum', { pos: farmerProcurement.position, defaultValue: `Position #${farmerProcurement.position}` })}
                         </span>
                       </div>
                       <div>
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase block">
-                          Estimated Time
+                          {t('trackToken.estimatedWaitTime', 'Estimated Time')}
                         </span>
                         <span className="text-sm sm:text-base font-black text-amber-800 dark:text-amber-300 block mt-0.5">
                           {farmerProcurement.estimatedTime}
@@ -842,17 +855,17 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-neutral-300 flex items-center gap-1.5">
                           <Clock className="h-3.5 w-3.5 text-slate-500 dark:text-neutral-400 shrink-0" />
-                          3. Upcoming Procurement
+                          {t('trackToken.upcomingProcurement', '3. Upcoming Procurement')}
                         </span>
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-slate-600 dark:text-neutral-400 bg-slate-100 dark:bg-neutral-800 px-2 py-0.5 rounded border border-slate-200 dark:border-neutral-700">
-                          {upcomingProcurement.hasUpcoming ? 'NEXT IN LINE' : 'AWAITING'}
+                          {upcomingProcurement.hasUpcoming ? t('trackToken.nextInLineBadge', 'NEXT IN LINE') : t('trackToken.awaitingBadge', 'AWAITING')}
                         </span>
                       </div>
 
                       {/* Focused Token No */}
                       <div className="bg-slate-50 dark:bg-neutral-800/70 p-3 rounded-xl border border-slate-200 dark:border-neutral-700/60">
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase tracking-wider block">
-                          Token No.
+                          {t('trackToken.tokenNo', 'Token No.')}
                         </span>
                         <span
                           className={clsx(
@@ -871,15 +884,17 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                     <div className="mt-4 pt-3 border-t border-slate-200 dark:border-neutral-800 grid grid-cols-2 gap-2 text-xs">
                       <div>
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase block">
-                          Position
+                          {t('trackToken.positionLabel', 'Position')}
                         </span>
                         <span className="text-sm sm:text-base font-black text-slate-900 dark:text-white block mt-0.5">
-                          {upcomingProcurement.hasUpcoming ? `Position #${upcomingProcurement.position}` : 'Standby'}
+                          {upcomingProcurement.hasUpcoming
+                            ? t('trackToken.positionNum', { pos: upcomingProcurement.position, defaultValue: `Position #${upcomingProcurement.position}` })
+                            : t('trackToken.standby', 'Standby')}
                         </span>
                       </div>
                       <div>
                         <span className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 uppercase block">
-                          Estimated Time
+                          {t('trackToken.estimatedWaitTime', 'Estimated Time')}
                         </span>
                         <span className="text-sm sm:text-base font-black text-slate-700 dark:text-neutral-300 block mt-0.5">
                           {upcomingProcurement.estimatedTime}
@@ -896,24 +911,26 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                     <span>
                       {currentProcurement.hasActiveToken ? (
                         <>
-                          Active counter: <strong className="font-mono text-slate-900 dark:text-white font-bold">{currentProcurement.token}</strong> (Pos #{currentProcurement.position}) ➔{' '}
+                          {t('trackToken.activeCounterPrefix', 'Active counter')}: <strong className="font-mono text-slate-900 dark:text-white font-bold">{currentProcurement.token}</strong> ({t('trackToken.positionNum', { pos: currentProcurement.position, defaultValue: `Pos #${currentProcurement.position}` })}) ➔{' '}
                         </>
                       ) : (
                         <>
-                          Active counter: <strong className="text-slate-700 dark:text-neutral-300 font-semibold">Counter Standby</strong> ➔{' '}
+                          {t('trackToken.activeCounterPrefix', 'Active counter')}: <strong className="text-slate-700 dark:text-neutral-300 font-semibold">{t('trackToken.counterStandby', 'Counter Standby')}</strong> ➔{' '}
                         </>
                       )}
-                      Your token: <strong className="font-mono text-amber-700 dark:text-amber-400 font-bold">{farmerProcurement.token}</strong> (Pos #{farmerProcurement.position})
+                      {t('trackToken.yourTokenPrefix', 'Your token')}: <strong className="font-mono text-amber-700 dark:text-amber-400 font-bold">{farmerProcurement.token}</strong> ({t('trackToken.positionNum', { pos: farmerProcurement.position, defaultValue: `Pos #${farmerProcurement.position}` })})
                       {upcomingProcurement.hasUpcoming && (
                         <>
-                          {' '}➔ Upcoming: <strong className="font-mono text-slate-900 dark:text-white font-bold">{upcomingProcurement.token}</strong> (Pos #{upcomingProcurement.position})
+                          {' '}➔ {t('trackToken.upcomingPrefix', 'Upcoming')}: <strong className="font-mono text-slate-900 dark:text-white font-bold">{upcomingProcurement.token}</strong> ({t('trackToken.positionNum', { pos: upcomingProcurement.position, defaultValue: `Pos #${upcomingProcurement.position}` })})
                         </>
                       )}
                       .
                     </span>
                   </div>
                   <span className="font-semibold text-emerald-700 dark:text-emerald-400 shrink-0">
-                    {telemetry?.farmersAhead ? `${telemetry.farmersAhead} vehicle(s) ahead` : 'Ready for processing'}
+                    {telemetry?.farmersAhead
+                      ? t('trackToken.vehiclesAhead', { count: telemetry.farmersAhead, defaultValue: `${telemetry.farmersAhead} vehicle(s) ahead` })
+                      : t('trackToken.readyForProcessing', 'Ready for processing')}
                   </span>
                 </div>
               </div>
@@ -928,14 +945,14 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                   <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                   <div className="space-y-0.5">
                     <h4 className="font-bold text-sm text-amber-950 dark:text-amber-200">
-                      ⚠️ Mandi experiencing yard delays
+                      {t('trackToken.yardDelayWarning', '⚠️ Mandi experiencing yard delays')}
                     </h4>
                     <p className="text-xs text-amber-800 dark:text-amber-300">
-                      Estimated waiting time has been updated dynamically. Delays may be due to moisture calibration or rail loading.
+                      {t('trackToken.yardDelayDesc', 'Estimated waiting time has been updated dynamically. Delays may be due to moisture calibration or rail loading.')}
                     </p>
                     {telemetry.activeDelay.notes && (
                       <p className="text-xs text-amber-900 dark:text-amber-200 font-semibold mt-1">
-                        Notice: {telemetry.activeDelay.notes}
+                        {t('trackToken.noticeLabel', 'Notice')}: {telemetry.activeDelay.notes}
                       </p>
                     )}
                   </div>
@@ -947,12 +964,12 @@ export const LiveQueueIntelligenceCard: React.FC<LiveQueueIntelligenceCardProps>
                 <div className="flex items-center gap-2 text-slate-700 dark:text-neutral-300">
                   <Activity className="h-4 w-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
                   <span>
-                    Throughput Basis: <strong className="text-slate-900 dark:text-white">{telemetry?.etaLabel || 'Active Weighbridge Velocity'}</strong>
+                    {t('trackToken.throughputBasis', 'Throughput Basis')}: <strong className="text-slate-900 dark:text-white">{telemetry?.etaLabel || t('trackToken.weighbridgeVelocity', 'Active Weighbridge Velocity')}</strong>
                   </span>
                 </div>
 
                 <span className="text-[11px] text-slate-500 dark:text-neutral-400">
-                  Pre-gate live queue updating dynamically from Mandi server
+                  {t('trackToken.preGateDynamicNotice', 'Pre-gate live queue updating dynamically from Mandi server')}
                 </span>
               </div>
             </div>

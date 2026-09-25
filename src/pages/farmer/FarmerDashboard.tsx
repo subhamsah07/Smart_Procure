@@ -677,52 +677,6 @@ export const FarmerDashboard: React.FC = () => {
       {/* 5. CURRENT BOOKING (TOKEN + QR + DETAILS) */}
       {!isLoadingBooking && !bookingError && booking && (
         <>
-          {/* Multiple Bookings Switcher Banner */}
-          {allBookings.length > 1 && (
-            <div className="rounded-2xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/60 dark:bg-emerald-950/20 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-2 w-2 rounded-full bg-emerald-600 animate-pulse" />
-                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
-                    {t('dashboard.multipleBookings', 'Multiple Bookings Available')} ({allBookings.length})
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600 dark:text-neutral-400">
-                  You have {allBookings.length} procurement appointments. Switch below to view details, or track all tokens together in Track Token.
-                </p>
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {allBookings.map((b) => {
-                    const isSelected = booking?.id === b.id || booking?.token === b.token;
-                    return (
-                      <button
-                        key={b.id || b.token}
-                        type="button"
-                        onClick={() => setBooking(b)}
-                        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                          isSelected
-                            ? 'bg-emerald-600 text-white shadow-xs'
-                            : 'bg-white dark:bg-neutral-900 text-slate-700 dark:text-neutral-300 border border-slate-200 dark:border-neutral-700 hover:border-emerald-400'
-                        }`}
-                      >
-                        <span className="font-mono font-bold">{b.token}</span>
-                        <span className="opacity-80">• {b.cropName}</span>
-                        {isSelected && <Check className="h-3 w-3" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <Link to="/farmer/token" className="shrink-0">
-                <Button variant="outline" size="sm" className="gap-2 text-xs font-semibold bg-white dark:bg-neutral-900 border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-neutral-800">
-                  <Activity className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>{t('dashboard.viewAllInTrackToken', 'Track All in Track Token')} ({allBookings.length})</span>
-                  <ArrowRight className="h-3 w-3" />
-                </Button>
-              </Link>
-            </div>
-          )}
-
           {/* Card: Current Booking */}
           <div className="rounded-2xl border border-slate-200/90 dark:border-neutral-800 bg-white dark:bg-neutral-950 p-5 sm:p-6 shadow-xs">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-neutral-800 pb-3 mb-4">

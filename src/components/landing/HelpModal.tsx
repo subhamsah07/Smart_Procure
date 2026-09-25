@@ -69,7 +69,9 @@ const DemoVideoCard: React.FC<DemoVideoCardProps> = ({ title, subtitle, src, alt
           onEnded={() => setIsPlaying(false)}
         >
           <source src={src} type="video/mp4" />
+          {encodeURI(src) !== src && <source src={encodeURI(src)} type="video/mp4" />}
           {altSrc && <source src={altSrc} type="video/mp4" />}
+          {altSrc && encodeURI(altSrc) !== altSrc && <source src={encodeURI(altSrc)} type="video/mp4" />}
           Your browser does not support HTML5 video.
         </video>
 
@@ -513,8 +515,8 @@ export const HelpModal: React.FC<HelpModalProps> = ({
             <DemoVideoCard
               title={t('nav.howToBookVideoTitle', 'How to book procurement')}
               subtitle={t('nav.howToBookVideoDesc', 'Step-by-step procurement slot and token booking guide')}
-              src="/farmer-booking.mp4"
-              altSrc="/Farmer booking(1).mp4"
+              src="/farmer booking(1).mp4"
+              altSrc="/farmer-booking.mp4"
               darkMode={darkMode}
             />
           </div>

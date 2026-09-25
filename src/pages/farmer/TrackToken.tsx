@@ -322,7 +322,7 @@ export const TrackToken: React.FC = () => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 sm:px-4 sm:py-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/70 dark:bg-emerald-950/20 shadow-2xs">
           <div className="flex items-center gap-2 text-emerald-900 dark:text-emerald-200 font-semibold text-xs shrink-0">
             <Layers className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-            <span>Switch Booking ({bookings.length}):</span>
+            <span>{t('trackToken.switchBooking', { count: bookings.length, defaultValue: `Switch Booking (${bookings.length}):` })}</span>
           </div>
           <div className="flex-1 w-full sm:max-w-md">
             <select
@@ -356,9 +356,11 @@ export const TrackToken: React.FC = () => {
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                      Procurement Center
+                      {t('dashboard.centre', 'Procurement Center')}
                     </span>
-                    <span className="text-xs text-slate-300 dark:text-neutral-400 font-medium">Slot Arrival Window</span>
+                    <span className="text-xs text-slate-300 dark:text-neutral-400 font-medium">
+                      {t('trackToken.slotArrivalWindow', 'Slot Arrival Window')}
+                    </span>
                   </div>
                   <div className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
                     <Clock className="h-4 w-4 text-emerald-400 shrink-0" />
@@ -370,7 +372,7 @@ export const TrackToken: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 text-emerald-400 border border-slate-700/80 text-xs font-semibold">
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
-                    <span>Loading Telemetry...</span>
+                    <span>{t('trackToken.loadingTelemetry', 'Loading Telemetry...')}</span>
                   </div>
                 </div>
               </div>
@@ -380,7 +382,7 @@ export const TrackToken: React.FC = () => {
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-neutral-800">
                   <div className="space-y-1">
                     <div className="text-xs text-slate-500 dark:text-neutral-400 uppercase tracking-wider font-bold">
-                      Active Token Telemetry
+                      {t('trackToken.activeTokenTelemetry', 'Active Token Telemetry')}
                     </div>
                     <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white font-mono flex items-center gap-2">
                       <span>{selectedBooking.token}</span>
@@ -390,7 +392,7 @@ export const TrackToken: React.FC = () => {
                     </div>
                   </div>
                   <div className="text-xs text-slate-500 dark:text-neutral-400">
-                    Centre: <span className="font-semibold text-slate-800 dark:text-neutral-200">{selectedBooking.centreName}</span>
+                    {t('trackToken.centreLabel', 'Centre')}: <span className="font-semibold text-slate-800 dark:text-neutral-200">{selectedBooking.centreName}</span>
                   </div>
                 </div>
 
@@ -438,7 +440,7 @@ export const TrackToken: React.FC = () => {
           )
         ) : (
           <div className="p-8 rounded-2xl border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-center text-sm text-slate-500">
-            Please select a booking above to view live queue intelligence.
+            {t('trackToken.selectBookingPrompt', 'Please select a booking above to view live queue intelligence.')}
           </div>
         )}
       </div>
@@ -448,10 +450,10 @@ export const TrackToken: React.FC = () => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div className="space-y-0.5">
             <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
-              Track Another Booking Token
+              {t('trackToken.trackAnotherTitle', 'Track Another Booking Token')}
             </h4>
             <p className="text-xs text-slate-600 dark:text-neutral-400">
-              Have another token receipt? Enter the 6-character token code to view its queue status.
+              {t('trackToken.trackAnotherDesc', 'Have another token receipt? Enter the 6-character token code to view its queue status.')}
             </p>
           </div>
           <form onSubmit={handleManualSearch} className="flex gap-2 w-full sm:w-auto">
@@ -459,12 +461,12 @@ export const TrackToken: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="e.g. SP7K4Q"
+              placeholder={t('trackToken.trackAnotherPlaceholder', 'e.g. SP7K4Q')}
               className="flex-1 sm:flex-initial px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-neutral-700 bg-slate-50 dark:bg-neutral-800 text-slate-900 dark:text-white font-mono uppercase tracking-wider focus:outline-hidden focus:ring-2 focus:ring-emerald-500 w-full sm:w-36"
             />
             <Button type="submit" variant="primary" size="sm" isLoading={isSearching} className="gap-1 text-xs shrink-0">
               <Search className="h-3 w-3" />
-              <span>Track</span>
+              <span>{t('trackToken.trackBtn', 'Track')}</span>
             </Button>
           </form>
         </div>
